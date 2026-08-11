@@ -123,7 +123,7 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-### RTX 4070 Ti Super 推荐模型训练
+### 推荐模型训练
 
 平台不会加载 LLM。GPU 只用于训练轻量推荐模型，安装可选依赖即可：
 
@@ -238,21 +238,6 @@ git diff --check
 ```
 
 当前测试覆盖采集与调度选择、来源安全校验、分类、推荐模型、AI 模型发现、文章生成、图片搜集、Markdown 渲染、图片位置规划、文章库自动保存和前端加载提示。
-
-## GitHub 推送
-
-如果你使用本地目录直接初始化仓库：
-
-```powershell
-git init
-git remote add origin https://github.com/fjy566/Content-idea-workflow.git
-git add .
-git commit -m "feat: improve Chinese topic workflow and editor"
-git branch -M main
-git push -u origin main
-```
-
-如果远程仓库已有提交，先查看远程分支再合并；不要使用 `git push --force` 覆盖远程历史。
 
 ## 许可
 
