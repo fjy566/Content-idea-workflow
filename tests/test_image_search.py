@@ -36,6 +36,41 @@ def test_360_search_downloads_a_real_raster_result_and_keeps_source(tmp_path, mo
     assert result.file_path.read_bytes() == b"jpeg-data"
 
 
+@respx.mock
+def test_360_search_skips_unrelated_results_and_prefers_context_match(tmp_path, monkeypatch):
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    monkeypatch.setattr(image_search, "settings", replace(image_search.settings, data_dir=tmp_path))
+    respx.get(image_search.QIHOO_IMAGE_API).mock(return_value=httpx.Response(200, json={
+        "list": [
+            {"title": "海边风景壁纸", "thumb": "https://cdn.example.com/beach.jpg", "link": "https://news.example.com/beach"},
+            {"title": "小鹏G9L 预售权益与车型价格", "thumb": "https://cdn.example.com/g9l.jpg", "link": "https://news.example.com/g9l"},
+        ],
+    }))
+    respx.get("https://cdn.example.com/g9l.jpg").mock(
+        return_value=httpx.Response(200, content=b"g9l", headers={"content-type": "image/jpeg"})
+    )
+
+    result = image_search.search_360_image("小鹏G9L 预售权益")
+
+    assert result.source_url == "https://news.example.com/g9l"
+    assert not (image_dir / "beach.jpg").exists()
+
+
+@respx.mock
+def test_360_search_rejects_a_batch_without_topic_matches(monkeypatch):
+    respx.get(image_search.QIHOO_IMAGE_API).mock(return_value=httpx.Response(200, json={
+        "list": [{"title": "海边风景壁纸", "thumb": "https://cdn.example.com/beach.jpg"}],
+    }))
+
+    try:
+        image_search.search_360_image("小鹏G9L 预售权益")
+    except ValueError as exc:
+        assert "没有找到可安全下载" in str(exc)
+    else:
+        raise AssertionError("Unrelated image results must not be saved")
+
+
 def test_china_search_does_not_silently_switch_to_a_foreign_source(monkeypatch):
     monkeypatch.setattr(image_search, "search_360_image", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("中国搜索被限制")))
 

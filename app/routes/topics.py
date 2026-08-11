@@ -385,8 +385,9 @@ def generate_image(
     for index in range(1, requested_count + 1):
         try:
             if mode == "search":
+                search_query = article_image_queries(article.title, article.content, prompt, 1)[0]
                 found = search_image(
-                    prompt,
+                    search_query,
                     excluded_urls,
                     get_setting(db, "image_search_provider", DEFAULT_IMAGE_SEARCH_PROVIDER),
                 )
@@ -394,7 +395,7 @@ def generate_image(
                 image = GeneratedImage(
                     article_id=article.id,
                     file_path=relative_file_path(found.file_path, settings.data_dir),
-                    prompt=prompt,
+                    prompt=search_query,
                     provider=found.provider,
                     source_url=found.source_url,
                     attribution=found.attribution,

@@ -50,6 +50,9 @@ def test_editor_exposes_human_friendly_formatting_and_draft_recovery():
     assert "requestAutosave" in script
     assert "setInterval(() => requestAutosave(\"定时\"), 30_000)" in script
     assert 'button.addEventListener("mousedown", (event) => event.preventDefault())' in script
+    assert '<details id="markdown-help"' in source
+    assert "<summary>打开 Markdown 小抄</summary>" in source
+    assert "toggle-markdown-help" not in script
 
 
 def test_settings_exposes_chinese_image_search_provider():

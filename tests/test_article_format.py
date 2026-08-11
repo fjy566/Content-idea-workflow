@@ -48,7 +48,12 @@ def test_auto_image_count_scales_with_length_and_manual_count_is_capped():
 
 def test_image_queries_use_headings_and_fill_requested_count():
     queries = article_image_queries("总标题", "# 总标题\n\n## 芯片产业\n\n正文\n\n## 人工智能\n\n正文", "", 4)
-    assert queries == ["芯片产业", "人工智能", "总标题", "芯片产业"]
+    assert queries == [
+        "总标题 芯片产业 正文",
+        "总标题 人工智能 正文",
+        "总标题 芯片产业 正文 配图3",
+        "总标题 人工智能 正文 配图4",
+    ]
 
 
 def test_multiple_images_are_inserted_into_markdown_without_duplicates():

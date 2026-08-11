@@ -385,15 +385,6 @@
   });
   document.querySelectorAll("[data-editor-command]").forEach((button) => button.addEventListener("click", () => runCommand(button.dataset.editorCommand)));
   document.querySelectorAll("[data-view-mode]").forEach((button) => button.addEventListener("click", () => setViewMode(button.dataset.viewMode)));
-  document.querySelector("#toggle-markdown-help")?.addEventListener("click", (event) => {
-    const help = document.querySelector("#markdown-help");
-    if (!help) return;
-    const expanded = help.hidden;
-    help.hidden = !expanded;
-    event.currentTarget.setAttribute("aria-expanded", expanded ? "true" : "false");
-    event.currentTarget.textContent = expanded ? "收起 Markdown 小抄" : "打开 Markdown 小抄";
-  });
-
   editor.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "b") {
       event.preventDefault();

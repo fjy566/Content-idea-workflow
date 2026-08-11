@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -9,7 +10,7 @@ from bs4 import BeautifulSoup
 
 from .config import settings
 from .security import validate_public_url
-from .utils import clean_text, safe_filename
+from .utils import clean_text, safe_filename, tokenize
 
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
@@ -40,6 +41,50 @@ SEARCH_TRANSLATIONS = {
     "经济": "economy",
     "金融": "finance",
 }
+
+IMAGE_SEARCH_STOPWORDS = frozenset(
+    {
+        "一个",
+        "第一",
+        "第二",
+        "这个",
+        "那个",
+        "如何",
+        "为什么",
+        "是否",
+        "值得",
+        "现在",
+        "进行",
+        "相关",
+        "主要",
+        "官方",
+        "目前",
+        "确认",
+        "根据",
+        "披露",
+        "政策",
+        "开启",
+        "提供",
+        "具体",
+        "内容",
+        "正文",
+        "文章",
+        "部分",
+        "分析",
+        "拆解",
+        "背后",
+        "观点",
+        "影响",
+        "情况",
+        "问题",
+        "用户",
+        "消费者",
+        "市场",
+        "新闻",
+        "现场",
+        "配图",
+    }
+)
 
 
 @dataclass(slots=True)
@@ -72,6 +117,41 @@ def _query_candidates(query: str) -> list[str]:
         candidates.append(query)
     candidates.append("China technology" if any(word in query for word in ("科技", "芯片", "AI", "人工智能")) else "China news")
     return list(dict.fromkeys(candidates))
+
+
+def _image_query_terms(query: str) -> list[str]:
+    terms = [
+        term
+        for term in tokenize(query)
+        if len(term) >= 2
+        and term not in IMAGE_SEARCH_STOPWORDS
+        and not re.fullmatch(r"\d+(?:\.\d+)?[万亿]?", term)
+    ]
+    for term in re.findall(r"[a-zA-Z]{2,}[a-zA-Z0-9._-]*|\d+(?:\.\d+)?[万亿]?", query.lower()):
+        if len(term) >= 2 and not re.fullmatch(r"\d+(?:\.\d+)?[万亿]?", term) and term not in terms:
+            terms.append(term)
+    return sorted(set(terms), key=lambda value: (-len(value), value))
+
+
+def _image_candidate_text(item: dict) -> str:
+    fields = ("title", "desc", "tag", "source", "keyword", "link")
+    return clean_text(" ".join(str(item.get(field) or "") for field in fields), 2400).lower()
+
+
+def _image_relevance(query: str, item: dict) -> float:
+    """Return zero for results that do not share meaningful topic terms."""
+    terms = _image_query_terms(query)
+    if not terms:
+        return 1.0
+    candidate_text = _image_candidate_text(item)
+    hits = [term for term in terms if term in candidate_text]
+    core_terms = terms[: min(2, len(terms))]
+    if not any(term in candidate_text for term in core_terms):
+        return 0.0
+    minimum_hits = 2 if len(terms) >= 6 else 1
+    if len(hits) < minimum_hits:
+        return 0.0
+    return len(hits) / len(terms)
 
 
 def search_commons_image(query: str, exclude_source_urls: set[str] | None = None) -> CommonsImage:
@@ -182,9 +262,12 @@ def search_360_image(query: str, exclude_source_urls: set[str] | None = None) ->
             if not isinstance(rows, list):
                 rows = []
             seen_urls: set[str] = set()
-            for item in rows:
-                if not isinstance(item, dict):
-                    continue
+            ranked_rows = [
+                (score, -index, item)
+                for index, item in enumerate(rows)
+                if isinstance(item, dict) and (score := _image_relevance(query, item)) > 0
+            ]
+            for _, _, item in sorted(ranked_rows, reverse=True):
                 image_url = clean_text(item.get("thumb") or item.get("thumb_bak") or item.get("https") or item.get("img"), 2000)
                 if image_url.startswith("//"):
                     image_url = f"https:{image_url}"

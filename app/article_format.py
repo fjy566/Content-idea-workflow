@@ -38,17 +38,41 @@ def resolve_image_count(value: str, target_length: int) -> int:
         return auto_image_count(target_length)
 
 
+def _image_section_contexts(content: str) -> list[str]:
+    matches = list(re.finditer(r"(?m)^#{2,3}\s+(.+?)\s*$", content or ""))
+    contexts: list[str] = []
+    for index, match in enumerate(matches):
+        heading = clean_text(match.group(1), 120)
+        next_start = matches[index + 1].start() if index + 1 < len(matches) else len(content or "")
+        section_body = content[match.end() : next_start]
+        section_body = re.sub(r"!\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\([^)]*\)", " ", section_body)
+        section_body = re.sub(r"[*_`>#|]", " ", section_body)
+        section_body = clean_text(section_body, 100)
+        contexts.append(clean_text(f"{heading} {section_body}", 190))
+    return contexts
+
+
 def article_image_queries(title: str, content: str, instruction: str, count: int) -> list[str]:
-    headings = [
-        clean_text(match.group(1), 160)
-        for match in re.finditer(r"(?m)^#{2,3}\s+(.+?)\s*$", content or "")
-        if clean_text(match.group(1), 160)
-    ]
-    seeds = [clean_text(instruction, 160), *headings, clean_text(title, 160)]
-    unique = list(dict.fromkeys(seed for seed in seeds if len(seed) >= 2))
-    if not unique:
-        unique = ["中国 科技 新闻"]
-    return [unique[index % len(unique)] for index in range(count)]
+    """Build context-rich Chinese search queries for each article illustration.
+
+    A bare heading is often too generic for an image engine.  Keep the article
+    subject in every query and add the matching section's first paragraph so a
+    search result has to agree with both the topic and the local context.
+    """
+    title_text = clean_text(title, 140)
+    instruction_text = clean_text(instruction, 100)
+    contexts = _image_section_contexts(content)
+    if not contexts:
+        body = re.sub(r"!\[[^\]]*\]\([^)]*\)|\[[^\]]*\]\([^)]*\)", " ", content or "")
+        body = re.sub(r"[*_`>#|]", " ", body)
+        contexts = [clean_text(body, 120) or "主题现场"]
+    queries: list[str] = []
+    for index in range(max(0, count)):
+        context = contexts[index % len(contexts)]
+        variation = f" 配图{index + 1}" if index >= len(contexts) else ""
+        query = clean_text(f"{title_text} {context} {instruction_text}{variation}", 220)
+        queries.append(query or "中国 科技 新闻 现场")
+    return queries
 
 
 def _escape_markdown_text(value: str) -> str:
