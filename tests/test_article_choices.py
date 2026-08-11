@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 import app.routes.topics as topic_routes
 from app.image_search import CommonsImage
 from app.models import AITask, Article, Base, GeneratedImage, Topic
-from app.routes.topics import generate_article
+from app.routes.topics import generate_article, generate_image
 
 
 def _db_with_topic() -> Session:
@@ -106,5 +106,81 @@ def test_article_generation_searches_multiple_images_and_inserts_them(tmp_path, 
         assert article.content.count("/media/images/") == 4
         assert all(image.source_url in article.content for image in images)
         assert article.content.index("/media/images/1.jpg") > article.content.index("第二段。")
+    finally:
+        db.close()
+
+
+def test_empty_model_article_is_not_saved_and_task_is_marked_failed(monkeypatch):
+    db = _db_with_topic()
+
+    class Provider:
+        chat_config = SimpleNamespace(model="test-chat", configured=True)
+        image_config = SimpleNamespace(model="test-image", configured=False)
+
+        def generate_article(self, *_args, **_kwargs):
+            return "   ", {"total_tokens": 1}
+
+    monkeypatch.setattr(topic_routes.AIProvider, "from_db", lambda _db: Provider())
+    try:
+        response = generate_article(
+            9,
+            angle_choice="custom",
+            custom_topic="写给普通读者的风险说明",
+            target_length="1200",
+            db=db,
+        )
+
+        assert response.status_code == 303
+        assert "article_error=" in response.headers["location"]
+        assert db.scalar(select(Article).where(Article.topic_id == 9)) is None
+        task = db.scalar(select(AITask).order_by(AITask.id.desc()))
+        assert task.status == "failed"
+    finally:
+        db.close()
+
+
+def test_manual_search_uses_contextual_queries_and_preserves_image_order(tmp_path, monkeypatch):
+    db = _db_with_topic()
+    image_dir = tmp_path / "images"
+    image_dir.mkdir()
+    monkeypatch.setattr(topic_routes, "settings", replace(topic_routes.settings, data_dir=tmp_path))
+
+    class Provider:
+        chat_config = SimpleNamespace(model="test-chat", configured=False)
+        image_config = SimpleNamespace(model="test-image", configured=False)
+
+    monkeypatch.setattr(topic_routes.AIProvider, "from_db", lambda _db: Provider())
+    calls = []
+
+    def fake_search(query, excluded, provider="360"):
+        index = len(calls) + 1
+        calls.append(query)
+        path = image_dir / f"manual-{index}.jpg"
+        path.write_bytes(b"image")
+        return CommonsImage(
+            file_path=path,
+            source_url=f"https://image.example.com/{index}.jpg",
+            attribution="来源：测试",
+            title=f"manual-{index}",
+        )
+
+    monkeypatch.setattr(topic_routes, "search_image", fake_search)
+    try:
+        article = Article(
+            topic_id=9,
+            title="国产芯片热点",
+            content="# 标题\n\n第一段。\n\n## 背景\n\n第二段。",
+            status="draft",
+        )
+        db.add(article)
+        db.commit()
+
+        response = generate_image(article.id, "芯片现场", "search", "2", "after_first", db)
+        db.refresh(article)
+
+        assert response.status_code == 303
+        assert len(calls) == 2
+        assert calls[0] != calls[1]
+        assert article.content.index("/media/images/manual-1.jpg") < article.content.index("/media/images/manual-2.jpg")
     finally:
         db.close()

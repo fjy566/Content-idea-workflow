@@ -77,3 +77,14 @@ def clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
 
 def relative_file_path(path: Path, root: Path) -> str:
     return str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+
+
+def image_extension_from_bytes(data: bytes) -> str | None:
+    """Return a safe raster extension only when the file signature is known."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "jpg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp"
+    return None

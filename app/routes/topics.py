@@ -193,6 +193,9 @@ def generate_article(
             selected_angle=selected_angle,
             target_length=str(target_length_value),
         )
+        content = str(content or "").strip()[:100_000]
+        if not content:
+            raise AIProviderError("文本模型返回了空文章正文")
         title = topic.title
         for line in content.splitlines():
             stripped = line.strip().lstrip("#").strip()
@@ -346,8 +349,20 @@ def save_article(
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
-    article.title = title.strip()[:1000]
-    article.content = content[:200_000]
+    normalized_title = title.strip()[:1000]
+    normalized_content = content[:200_000]
+    if not normalized_title:
+        return RedirectResponse(
+            f"/articles/{article_id}?notice={quote_plus('文章标题不能为空')}",
+            status_code=303,
+        )
+    if not normalized_content.strip():
+        return RedirectResponse(
+            f"/articles/{article_id}?notice={quote_plus('文章正文不能为空')}",
+            status_code=303,
+        )
+    article.title = normalized_title
+    article.content = normalized_content
     previous_status = article.status
     article.status = status if status in {"draft", "ready", "published"} else "draft"
     db.commit()
@@ -379,13 +394,20 @@ def generate_image(
     except (TypeError, ValueError):
         requested_count = 1
     insert_position = insert_position if insert_position in {"library", "auto", "start", "after_first", "middle", "end"} else "library"
+    if not prompt:
+        _finish_task(db, task, "failed", error="请填写图片说明或搜索词")
+        return RedirectResponse(
+            f"/articles/{article_id}?notice={quote_plus('请填写图片说明或搜索词')}",
+            status_code=303,
+        )
     created_images: list[GeneratedImage] = []
     errors: list[str] = []
     excluded_urls = {image.source_url for image in article.images if image.source_url}
+    queries = article_image_queries(article.title, article.content, prompt, requested_count)
     for index in range(1, requested_count + 1):
         try:
             if mode == "search":
-                search_query = article_image_queries(article.title, article.content, prompt, 1)[0]
+                search_query = queries[index - 1]
                 found = search_image(
                     search_query,
                     excluded_urls,
@@ -420,7 +442,12 @@ def generate_image(
         if insert_position == "auto":
             article.content = insert_images_evenly(article.content, created_images)
         elif insert_position != "library":
-            for image in created_images:
+            ordered_images = (
+                list(reversed(created_images))
+                if insert_position in {"start", "after_first", "middle"}
+                else created_images
+            )
+            for image in ordered_images:
                 article.content = insert_image_markdown(article.content, image, insert_position)
         db.commit()
         record_feedback(db, article.topic_id, "add_image", article.id)

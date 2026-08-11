@@ -46,16 +46,17 @@ def add_source(
 ):
     if kind not in {"rss", "html", "html_js"}:
         return RedirectResponse("/sources?error=不支持的数据源类型", status_code=303)
-    if not name.strip() or not url.strip():
+    normalized_url = url.strip()[:2000]
+    if not name.strip() or not normalized_url:
         return RedirectResponse("/sources?error=名称和地址不能为空", status_code=303)
     try:
-        validate_public_url(url)
+        validate_public_url(normalized_url)
     except ValueError as exc:
         return RedirectResponse(f"/sources?error={quote_plus(str(exc))}", status_code=303)
     source = Source(
         name=name.strip()[:200],
         kind=kind,
-        url=url.strip()[:2000],
+        url=normalized_url,
         interval_minutes=max(5, min(1440, interval_minutes)),
         item_selector=item_selector.strip()[:500] or None,
         title_selector=title_selector.strip()[:500] or None,

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import feedparser
 import httpx
@@ -13,7 +14,7 @@ from dateutil.parser import parse as parse_date
 
 from .config import settings
 from .models import Source
-from .security import validate_public_url
+from .security import safe_request, validate_public_url
 from .utils import clean_text, content_hash, normalize_url
 
 
@@ -59,10 +60,10 @@ def _download(url: str) -> tuple[bytes, str]:
     headers = {"User-Agent": settings.user_agent, "Accept": "text/html,application/rss+xml,application/atom+xml,application/xml;q=0.9,*/*;q=0.8"}
     with httpx.Client(
         headers=headers,
-        follow_redirects=True,
+        follow_redirects=False,
         timeout=settings.request_timeout_seconds,
     ) as client:
-        response = client.get(url)
+        response = safe_request(client, "GET", url)
         response.raise_for_status()
         content_length = response.headers.get("content-length")
         if content_length and int(content_length) > settings.max_response_bytes:
@@ -176,8 +177,20 @@ def _download_dynamic(source: Source) -> bytes:
         browser = playwright.chromium.launch(headless=True)
         try:
             page = browser.new_page(user_agent=settings.user_agent)
+            def guard_request(route) -> None:
+                request_url = route.request.url
+                if urlsplit(request_url).scheme in {"http", "https"}:
+                    try:
+                        validate_public_url(request_url)
+                    except ValueError:
+                        route.abort()
+                        return
+                route.continue_()
+
+            page.route("**/*", guard_request)
             page.goto(source.url, wait_until="domcontentloaded", timeout=int(settings.request_timeout_seconds * 1000))
             page.wait_for_timeout(1000)
+            validate_public_url(page.url)
             body = page.content().encode("utf-8")
         finally:
             browser.close()

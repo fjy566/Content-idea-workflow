@@ -18,8 +18,8 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .models import Topic
 from .repositories import get_setting
-from .security import validate_public_url
-from .utils import clean_text, safe_filename
+from .security import safe_request, validate_public_url
+from .utils import clean_text, image_extension_from_bytes, safe_filename
 
 
 logger = logging.getLogger(__name__)
@@ -70,8 +70,8 @@ def discover_models(api_endpoint: str, api_key: str) -> list[str]:
     if api_key.strip():
         headers["Authorization"] = f"Bearer {api_key.strip()}"
     try:
-        with httpx.Client(timeout=settings.request_timeout_seconds * 2, follow_redirects=True) as client:
-            response = client.get(endpoint, headers=headers)
+        with httpx.Client(timeout=settings.request_timeout_seconds * 2, follow_redirects=False) as client:
+            response = safe_request(client, "GET", endpoint, headers=headers)
         response.raise_for_status()
         body = response.json()
     except (httpx.HTTPError, ValueError) as exc:
@@ -171,16 +171,17 @@ class AIProvider:
             payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.chat_config.api_key}", "Content-Type": "application/json"}
         endpoint = chat_completions_endpoint(self.chat_config.endpoint)
+        validate_public_url(endpoint)
         last_error: Exception | None = None
         for attempt in range(3):
             try:
-                with httpx.Client(timeout=settings.request_timeout_seconds * 3, follow_redirects=True) as client:
-                    response = client.post(endpoint, headers=headers, json=payload)
+                with httpx.Client(timeout=settings.request_timeout_seconds * 3, follow_redirects=False) as client:
+                    response = safe_request(client, "POST", endpoint, headers=headers, json=payload)
                 if response.status_code in {400, 404, 422} and json_mode and "response_format" in payload:
                     fallback_payload = dict(payload)
                     fallback_payload.pop("response_format", None)
-                    with httpx.Client(timeout=settings.request_timeout_seconds * 3, follow_redirects=True) as client:
-                        response = client.post(endpoint, headers=headers, json=fallback_payload)
+                    with httpx.Client(timeout=settings.request_timeout_seconds * 3, follow_redirects=False) as client:
+                        response = safe_request(client, "POST", endpoint, headers=headers, json=fallback_payload)
                 response.raise_for_status()
                 body = response.json()
                 return _message_content(body), body.get("usage", {}) if isinstance(body, dict) else {}
@@ -271,7 +272,10 @@ title、approach、reader_value 三个字符串字段。五个选题必须彼此
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             json_mode=False,
         )
-        return str(content or "").strip()[:100_000], usage
+        article = str(content or "").strip()
+        if not article:
+            raise AIProviderError("文本模型返回了空文章正文")
+        return article[:100_000], usage
 
     def plan_image_placements(
         self,
@@ -323,11 +327,12 @@ title、approach、reader_value 三个字符串字段。五个选题必须彼此
         if not self.image_config.configured:
             raise AIProviderError("Image API is not configured. Add image endpoint, API key, and model in Settings.")
         headers = {"Authorization": f"Bearer {self.image_config.api_key}", "Content-Type": "application/json"}
+        validate_public_url(self.image_config.endpoint)
         payload = {"model": self.image_config.model, "prompt": prompt, "size": "1024x1024", "response_format": "b64_json"}
         allowed_types = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
         try:
-            with httpx.Client(timeout=settings.request_timeout_seconds * 6, follow_redirects=True) as client:
-                response = client.post(self.image_config.endpoint, headers=headers, json=payload)
+            with httpx.Client(timeout=settings.request_timeout_seconds * 6, follow_redirects=False) as client:
+                response = safe_request(client, "POST", self.image_config.endpoint, headers=headers, json=payload)
                 response.raise_for_status()
                 body = response.json()
                 first = (body.get("data") or [{}])[0]
@@ -335,17 +340,21 @@ title、approach、reader_value 三个字符串字段。五个选题必须彼此
                     image_data = base64.b64decode(first["b64_json"], validate=True)
                     if not image_data or len(image_data) > settings.max_response_bytes:
                         raise AIProviderError("图片 API 返回的数据为空或超过大小限制")
-                    return image_data, "png", self.image_config.model
+                    extension = image_extension_from_bytes(image_data)
+                    if extension is None:
+                        raise AIProviderError("图片 API 返回的数据不是受支持的 JPG、PNG 或 WebP 图片")
+                    return image_data, extension, self.image_config.model
                 if first.get("url"):
                     validate_public_url(first["url"])
-                    image_response = client.get(first["url"])
+                    image_response = safe_request(client, "GET", first["url"])
                     image_response.raise_for_status()
-                    validate_public_url(str(image_response.url))
                     content_type = image_response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if content_type not in allowed_types:
                         raise AIProviderError("图片 API 只允许返回 JPG、PNG 或 WebP")
                     if not image_response.content or len(image_response.content) > settings.max_response_bytes:
                         raise AIProviderError("图片 API 返回的数据为空或超过大小限制")
+                    if image_extension_from_bytes(image_response.content) != allowed_types[content_type].lstrip("."):
+                        raise AIProviderError("图片 API 返回的内容与声明格式不一致")
                     return image_response.content, allowed_types[content_type], self.image_config.model
         except (httpx.HTTPError, ValueError, TypeError, KeyError, binascii.Error) as exc:
             raise AIProviderError(f"图片 API 请求失败：{exc}") from exc

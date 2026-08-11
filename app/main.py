@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
@@ -20,19 +21,30 @@ logging.basicConfig(
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title=settings.app_name)
-
-    @app.on_event("startup")
-    def startup() -> None:
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
         init_db()
         start_scheduler()
+        try:
+            yield
+        finally:
+            stop_scheduler()
 
-    @app.on_event("shutdown")
-    def shutdown() -> None:
-        stop_scheduler()
+    app = FastAPI(title=settings.app_name, lifespan=lifespan)
+
+    @app.middleware("http")
+    async def add_security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        return response
 
     app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
-    app.mount("/media", StaticFiles(directory=str(settings.data_dir)), name="media")
+    # Only expose downloaded/generated images. Mounting the whole data
+    # directory would make app.db and model artifacts downloadable over HTTP.
+    app.mount("/media/images", StaticFiles(directory=str(settings.image_dir)), name="media-images")
     app.include_router(dashboard.router)
     app.include_router(sources.router)
     app.include_router(settings_routes.router)

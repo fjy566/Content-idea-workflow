@@ -1,4 +1,4 @@
-from app.utils import content_hash, normalize_url, parse_csv_keywords, tokenize
+from app.utils import content_hash, image_extension_from_bytes, normalize_url, parse_csv_keywords, tokenize
 
 
 def test_normalize_url_removes_tracking_parameters():
@@ -19,3 +19,9 @@ def test_content_hash_is_stable():
 def test_parse_csv_keywords_supports_chinese_commas():
     assert parse_csv_keywords("职场，消费, 科技") == ["职场", "消费", "科技"]
 
+
+def test_image_signature_only_accepts_supported_raster_formats():
+    assert image_extension_from_bytes(b"\xff\xd8\xffjpeg") == "jpg"
+    assert image_extension_from_bytes(b"\x89PNG\r\n\x1a\npng") == "png"
+    assert image_extension_from_bytes(b"RIFFxxxxWEBPdata") == "webp"
+    assert image_extension_from_bytes(b"<html>not-an-image</html>") is None

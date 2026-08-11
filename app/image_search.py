@@ -9,8 +9,8 @@ import httpx
 from bs4 import BeautifulSoup
 
 from .config import settings
-from .security import validate_public_url
-from .utils import clean_text, safe_filename, tokenize
+from .security import safe_request, validate_public_url
+from .utils import clean_text, image_extension_from_bytes, safe_filename, tokenize
 
 
 COMMONS_API = "https://commons.wikimedia.org/w/api.php"
@@ -142,7 +142,7 @@ def _image_relevance(query: str, item: dict) -> float:
     """Return zero for results that do not share meaningful topic terms."""
     terms = _image_query_terms(query)
     if not terms:
-        return 1.0
+        return 0.0
     candidate_text = _image_candidate_text(item)
     hits = [term for term in terms if term in candidate_text]
     core_terms = terms[: min(2, len(terms))]
@@ -159,6 +159,8 @@ def search_commons_image(query: str, exclude_source_urls: set[str] | None = None
     query = clean_text(query, 200)
     if len(query) < 2:
         raise ValueError("图片搜索词至少需要 2 个字符")
+    if not _image_query_terms(query):
+        raise ValueError("图片搜索词需要包含具体主题词")
     params = {
         "action": "query",
         "format": "json",
@@ -174,9 +176,9 @@ def search_commons_image(query: str, exclude_source_urls: set[str] | None = None
     headers = {"User-Agent": settings.user_agent, "Accept": "application/json"}
     excluded = exclude_source_urls or set()
     try:
-        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=True, headers=headers) as client:
+        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=False, headers=headers) as client:
             for candidate in _query_candidates(query):
-                response = client.get(COMMONS_API, params={**params, "gsrsearch": candidate})
+                response = safe_request(client, "GET", COMMONS_API, params={**params, "gsrsearch": candidate})
                 response.raise_for_status()
                 pages = response.json().get("query", {}).get("pages", [])
                 for page in pages:
@@ -193,9 +195,8 @@ def search_commons_image(query: str, exclude_source_urls: set[str] | None = None
                         continue
                     validate_public_url(image_url)
                     validate_public_url(source_url)
-                    image_response = client.get(image_url)
+                    image_response = safe_request(client, "GET", image_url)
                     image_response.raise_for_status()
-                    validate_public_url(str(image_response.url))
                     actual_type = image_response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if actual_type not in ALLOWED_IMAGE_TYPES:
                         continue
@@ -207,6 +208,9 @@ def search_commons_image(query: str, exclude_source_urls: set[str] | None = None
                         continue
                     body = image_response.content
                     if not body or len(body) > settings.max_response_bytes:
+                        continue
+                    detected_extension = image_extension_from_bytes(body)
+                    if detected_extension != ALLOWED_IMAGE_TYPES[actual_type].lstrip("."):
                         continue
                     metadata = info.get("extmetadata") or {}
                     artist = _metadata_text(metadata, "Artist") or _metadata_text(metadata, "Credit") or "Wikimedia Commons 贡献者"
@@ -250,12 +254,14 @@ def search_360_image(query: str, exclude_source_urls: set[str] | None = None) ->
     query = clean_text(query, 200)
     if len(query) < 2:
         raise ValueError("图片搜索词至少需要 2 个字符")
+    if not _image_query_terms(query):
+        raise ValueError("图片搜索词需要包含具体主题词")
     excluded = exclude_source_urls or set()
     params = {"q": query, "pn": 40, "sn": 0}
     headers = {"User-Agent": settings.user_agent, "Accept": "application/json"}
     try:
-        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=True, headers=headers) as client:
-            response = client.get(QIHOO_IMAGE_API, params=params)
+        with httpx.Client(timeout=settings.request_timeout_seconds, follow_redirects=False, headers=headers) as client:
+            response = safe_request(client, "GET", QIHOO_IMAGE_API, params=params)
             response.raise_for_status()
             payload = response.json()
             rows = payload.get("list", []) if isinstance(payload, dict) else []
@@ -278,9 +284,8 @@ def search_360_image(query: str, exclude_source_urls: set[str] | None = None) ->
                 seen_urls.add(image_url)
                 try:
                     validate_public_url(image_url)
-                    image_response = client.get(image_url)
+                    image_response = safe_request(client, "GET", image_url)
                     image_response.raise_for_status()
-                    validate_public_url(str(image_response.url))
                     actual_type = image_response.headers.get("content-type", "").split(";", 1)[0].lower()
                     if actual_type not in ALLOWED_IMAGE_TYPES:
                         continue
@@ -289,6 +294,9 @@ def search_360_image(query: str, exclude_source_urls: set[str] | None = None) ->
                         continue
                     body = image_response.content
                     if not body or len(body) > settings.max_response_bytes:
+                        continue
+                    detected_extension = image_extension_from_bytes(body)
+                    if detected_extension != ALLOWED_IMAGE_TYPES[actual_type].lstrip("."):
                         continue
                     source_url = _qihoo_source_url(item, image_url)
                     if source_url in excluded:

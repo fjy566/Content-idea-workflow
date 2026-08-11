@@ -6,6 +6,9 @@ import respx
 import app.image_search as image_search
 
 
+JPEG_BYTES = b"\xff\xd8\xff\xe0jpeg-data"
+
+
 def test_chinese_technology_query_has_relevant_english_fallbacks():
     candidates = image_search._query_candidates("人工智能 芯片")
     assert "artificial intelligence" in candidates
@@ -26,14 +29,14 @@ def test_360_search_downloads_a_real_raster_result_and_keeps_source(tmp_path, mo
         }],
     }))
     respx.get("https://cdn.example.com/chip.jpg").mock(
-        return_value=httpx.Response(200, content=b"jpeg-data", headers={"content-type": "image/jpeg"})
+        return_value=httpx.Response(200, content=JPEG_BYTES, headers={"content-type": "image/jpeg"})
     )
 
     result = image_search.search_360_image("国产 AI 芯片")
 
     assert result.provider == "360 图片（中国搜索）"
     assert result.source_url == "https://news.example.com/chip"
-    assert result.file_path.read_bytes() == b"jpeg-data"
+    assert result.file_path.read_bytes() == JPEG_BYTES
 
 
 @respx.mock
@@ -48,7 +51,7 @@ def test_360_search_skips_unrelated_results_and_prefers_context_match(tmp_path, 
         ],
     }))
     respx.get("https://cdn.example.com/g9l.jpg").mock(
-        return_value=httpx.Response(200, content=b"g9l", headers={"content-type": "image/jpeg"})
+        return_value=httpx.Response(200, content=JPEG_BYTES, headers={"content-type": "image/jpeg"})
     )
 
     result = image_search.search_360_image("小鹏G9L 预售权益")
@@ -83,6 +86,19 @@ def test_china_search_does_not_silently_switch_to_a_foreign_source(monkeypatch):
 
 
 @respx.mock
+def test_image_search_rejects_a_query_without_meaningful_topic_terms():
+    route = respx.get(image_search.QIHOO_IMAGE_API).mock(return_value=httpx.Response(200, json={"list": []}))
+
+    try:
+        image_search.search_360_image("如何 现在")
+    except ValueError as exc:
+        assert "具体主题词" in str(exc)
+    else:
+        raise AssertionError("Generic stopword queries must not fetch unrelated images")
+    assert not route.called
+
+
+@respx.mock
 def test_commons_search_skips_an_already_used_source(tmp_path, monkeypatch):
     image_dir = tmp_path / "images"
     image_dir.mkdir()
@@ -93,12 +109,12 @@ def test_commons_search_skips_an_already_used_source(tmp_path, monkeypatch):
         {"title": "File:First.jpg", "imageinfo": [{"mime": "image/jpeg", "thumburl": "https://upload.wikimedia.org/first.jpg", "descriptionurl": first_url}]},
         {"title": "File:Second.jpg", "imageinfo": [{"mime": "image/jpeg", "thumburl": "https://upload.wikimedia.org/second.jpg", "descriptionurl": second_url}]},
     ]}}))
-    respx.get("https://upload.wikimedia.org/second.jpg").mock(return_value=httpx.Response(200, content=b"second", headers={"content-type": "image/jpeg"}))
+    respx.get("https://upload.wikimedia.org/second.jpg").mock(return_value=httpx.Response(200, content=JPEG_BYTES, headers={"content-type": "image/jpeg"}))
 
     result = image_search.search_commons_image("芯片", {first_url})
 
     assert result.source_url == second_url
-    assert result.file_path.read_bytes() == b"second"
+    assert result.file_path.read_bytes() == JPEG_BYTES
 
 
 @respx.mock
@@ -128,13 +144,13 @@ def test_commons_search_downloads_real_response_and_keeps_attribution(tmp_path, 
         )
     )
     respx.get("https://upload.wikimedia.org/chip.jpg").mock(
-        return_value=httpx.Response(200, content=b"jpeg-data", headers={"content-type": "image/jpeg"})
+        return_value=httpx.Response(200, content=JPEG_BYTES, headers={"content-type": "image/jpeg"})
     )
 
     result = image_search.search_commons_image("人工智能芯片")
 
     assert result.file_path.exists()
-    assert result.file_path.read_bytes() == b"jpeg-data"
+    assert result.file_path.read_bytes() == JPEG_BYTES
     assert "真实作者" in result.attribution
     assert "CC BY-SA 4.0" in result.attribution
     assert result.source_url.endswith("File:Chip.jpg")

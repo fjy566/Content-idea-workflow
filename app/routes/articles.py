@@ -81,8 +81,8 @@ def delete_article_from_library(
 @router.post("/{article_id}/autosave", response_class=JSONResponse)
 def autosave_article(
     article_id: int,
-    title: str = Form(...),
-    content: str = Form(...),
+    title: str = Form(""),
+    content: str = Form(""),
     status: str = Form("draft"),
     db: Session = Depends(get_db),
 ):
@@ -90,8 +90,15 @@ def autosave_article(
     article = db.get(Article, article_id)
     if article is None:
         raise HTTPException(status_code=404, detail="Article not found")
-    article.title = title.strip()[:1000]
-    article.content = content[:200_000]
+    normalized_title = title.strip()[:1000]
+    normalized_content = content[:200_000]
+    if not normalized_title or not normalized_content.strip():
+        return JSONResponse(
+            {"saved": False, "error": "标题和正文不能为空，当前内容已保留在浏览器本地草稿中"},
+            status_code=422,
+        )
+    article.title = normalized_title
+    article.content = normalized_content
     article.status = status if status in STATUS_LABELS else "draft"
     article.updated_at = utcnow()
     db.commit()

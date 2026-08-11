@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .models import Article, ModelArtifact, Setting, Source
+from .models import Article, GeneratedImage, ModelArtifact, Setting, Source
 
 
 logger = logging.getLogger(__name__)
@@ -89,14 +89,21 @@ def delete_article(db: Session, article_id: int, data_dir: Path) -> bool:
     if article is None:
         return False
 
-    image_paths = [
-        path
-        for image in article.images
-        if (path := _safe_article_image_path(image.file_path, data_dir)) is not None
-    ]
+    stored_paths = list(dict.fromkeys(str(image.file_path) for image in article.images))
     db.delete(article)
     db.commit()
 
+    remaining_paths = set()
+    if stored_paths:
+        remaining_paths = set(
+            db.scalars(select(GeneratedImage.file_path).where(GeneratedImage.file_path.in_(stored_paths))).all()
+        )
+    image_paths = [
+        path
+        for file_path in stored_paths
+        if file_path not in remaining_paths
+        and (path := _safe_article_image_path(file_path, data_dir)) is not None
+    ]
     for path in image_paths:
         try:
             if path.is_file():
