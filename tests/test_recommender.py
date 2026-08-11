@@ -41,10 +41,12 @@ def test_recommender_can_train_on_feedback_in_temporary_database(tmp_path, monke
             db.flush()
             db.add(Feedback(topic_id=topic.id, action="publish", value=float(index + 1)))
         db.commit()
-        metrics = recommender.train_model(db)
+        progress_updates = []
+        metrics = recommender.train_model(db, requested_device="cpu", progress_callback=progress_updates.append)
         assert metrics["samples"] == 8
+        assert metrics["requested_device"] == "cpu"
+        assert metrics["device"] == "CPU"
         assert metrics["feature_count"] == len(FEATURE_NAMES)
-        assert metrics["device"] in {"CPU", "CUDA"}
         assert metrics["train_samples"] == 8
         assert metrics["target_min"] <= metrics["target_mean"] <= metrics["target_max"]
         assert len(metrics["top_features"]) == 10
@@ -58,3 +60,28 @@ def test_recommender_can_train_on_feedback_in_temporary_database(tmp_path, monke
         assert status["unscored_count"] == 0
         assert sum(item["count"] for item in status["feedback_breakdown"]) == 8
         assert status["training_history"]
+        assert progress_updates[0]["phase"] == "preparing"
+        assert any(update["phase"] == "evaluation_done" for update in progress_updates)
+        assert progress_updates[-1]["phase"] == "completed"
+        assert progress_updates[-1]["progress"] == 100
+
+
+def test_cuda_request_is_rejected_when_cuda_is_unavailable(monkeypatch):
+    monkeypatch.setattr(
+        recommender,
+        "gpu_status",
+        lambda: {
+            "available": False,
+            "name": "未检测到",
+            "xgboost_cuda": False,
+            "cuda_ready": False,
+            "cuda_reason": "测试环境没有 CUDA",
+            "xgboost_version": None,
+        },
+    )
+    try:
+        recommender._new_model("cuda")
+    except ValueError as exc:
+        assert "测试环境没有 CUDA" in str(exc)
+    else:
+        raise AssertionError("CUDA request should fail when CUDA is unavailable")

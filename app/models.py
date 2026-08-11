@@ -188,6 +188,24 @@ class ModelArtifact(Base):
     trained_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class RecommenderTrainingRun(Base):
+    __tablename__ = "recommender_training_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requested_device: Mapped[str] = mapped_column(String(20), default="auto")
+    actual_device: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    phase: Mapped[str] = mapped_column(String(50), default="queued")
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    message: Mapped[str] = mapped_column(Text, default="等待训练任务开始")
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class CrawlRun(Base):
     __tablename__ = "crawl_runs"
 

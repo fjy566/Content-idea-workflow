@@ -59,3 +59,20 @@ def test_settings_exposes_chinese_image_search_provider():
     assert 'name="image_search_provider"' in source
     assert "360 图片（中国搜索）" in source
     assert "image_search_provider" in route
+
+
+def test_recommender_exposes_device_choice_and_real_progress_polling():
+    source = Path("app/templates/recommender.html").read_text(encoding="utf-8")
+    script = Path("app/static/recommender.js").read_text(encoding="utf-8")
+    route = Path("app/routes/recommender.py").read_text(encoding="utf-8")
+
+    assert 'name="training_device"' in source
+    assert 'value="cpu"' in source
+    assert 'value="cuda"' in source
+    assert 'id="training-progress-bar"' in source
+    assert 'data-status-url="/recommender/training/{{ training_run.id }}/status"' in source
+    assert 'src="/static/recommender.js?v=1"' in source
+    assert "setInterval(poll, 1000)" in script
+    assert "fetch(statusUrl" in script
+    assert 'training_device: str = Form("auto")' in route
+    assert 'router.get("/training/{run_id}/status"' in route

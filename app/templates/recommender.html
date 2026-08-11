@@ -12,6 +12,23 @@
   <div><span>数据覆盖率</span><strong>{{ status.coverage_percent }}%</strong><small>有反馈选题 / 全部热点</small></div>
 </section>
 
+{% if training_run %}
+<section id="training-progress-card" class="panel training-progress-card" data-status-url="/recommender/training/{{ training_run.id }}/status">
+  <div class="panel-title"><div><h2>训练实时进度</h2><p class="help">任务状态会自动刷新；关闭或刷新页面后仍可从当前链接继续查看。</p></div><span id="training-status" class="status {% if training_run.status == 'succeeded' %}ok{% elif training_run.status == 'failed' %}error{% endif %}">{% if training_run.status == 'pending' %}排队中{% elif training_run.status == 'running' %}训练中{% elif training_run.status == 'succeeded' %}已完成{% elif training_run.status == 'failed' %}失败{% else %}{{ training_run.status }}{% endif %}</span></div>
+  <div class="training-progress-heading"><strong id="training-progress-percent">{{ '%.0f'|format(training_run.progress or 0) }}%</strong><span id="training-phase">{{ training_run.phase }}</span></div>
+  <progress id="training-progress-bar" max="100" value="{{ training_run.progress or 0 }}">{{ training_run.progress or 0 }}%</progress>
+  <p id="training-message" class="training-live-message">{{ training_run.message }}</p>
+  <div class="training-live-grid">
+    <div><span>请求设备</span><strong id="training-requested-device">{{ training_run.requested_device|upper }}</strong></div>
+    <div><span>实际设备</span><strong id="training-actual-device">{{ training_run.actual_device or '等待检测' }}</strong></div>
+    <div><span>训练样本</span><strong id="training-sample-count">{{ training_run.sample_count or '—' }}</strong></div>
+    <div><span>当前算法</span><strong id="training-algorithm">{{ training_run.metrics_json.algorithm if training_run.metrics_json and training_run.metrics_json.algorithm is defined else '等待开始' }}</strong></div>
+  </div>
+  <div id="training-live-metrics" class="training-live-metrics"></div>
+  <p id="training-error" class="danger-text"{% if not training_run.error_message %} hidden{% endif %}>{{ training_run.error_message or '' }}</p>
+</section>
+{% endif %}
+
 <div class="model-grid">
   <section class="panel model-status">
     <div class="panel-title"><div><h2>最近一次训练</h2><p class="help">每次训练都会使用目前所有真实反馈。</p></div>{% if status.trained %}<span class="status ok">模型已加载</span>{% else %}<span class="status">规则评分中</span>{% endif %}</div>
@@ -24,9 +41,13 @@
     </dl>
     <p class="muted">训练时间：{{ status.artifact.trained_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
     {% else %}<p class="muted">积累至少 8 个不同选题的反馈后才能训练。还需要 {{ status.samples_needed }} 个。</p>{% endif %}
-    <form method="post" action="/recommender/train" data-loading data-loading-title="正在训练本地推荐模型" data-loading-detail="正在整理真实反馈、使用 RTX/CPU 训练并重新计算全部热点分数，通常需要数秒到一分钟。"><button class="button primary" type="submit" data-loading-text="模型训练中…">用全部真实反馈训练/更新</button></form>
+    <form method="post" action="/recommender/train" data-loading data-loading-title="正在提交推荐模型训练" data-loading-detail="训练任务已提交，进入下一页后会显示真实阶段进度。">
+      <label class="training-device-field" for="training-device"><span>选择训练设备</span><select id="training-device" name="training_device"><option value="auto">自动选择（推荐）</option><option value="cpu">CPU（兼容性最好）</option><option value="cuda"{% if not status.hardware.cuda_ready %} disabled{% endif %}>CUDA（显卡加速）{% if not status.hardware.cuda_ready %} · 当前不可用{% endif %}</option></select></label>
+      <p class="help training-device-help">自动模式会在 CUDA 可用时使用 CUDA，否则使用 CPU。{{ status.hardware.cuda_reason }}</p>
+      <button class="button primary" type="submit" data-loading-text="训练任务提交中…">用全部真实反馈训练/更新</button>
+    </form>
   </section>
-  <section class="panel hardware-card"><h2>硬件与运行方式</h2><p class="gpu-name">{{ status.hardware.name }}</p><dl class="compact-facts"><div><dt>XGBoost</dt><dd>{{ status.hardware.xgboost_version or '未安装' }}</dd></div><div><dt>CUDA</dt><dd>{% if status.hardware.xgboost_cuda %}<span class="status ok">可用</span>{% else %}<span class="status">不可用</span>{% endif %}</dd></div><div><dt>预测设备</dt><dd>CPU</dd></div></dl><p class="help">GPU 负责训练；日常热点打分使用 CPU，减少显存占用。本机不会加载 LLM。</p></section>
+  <section class="panel hardware-card"><h2>硬件与运行方式</h2><p class="gpu-name">{{ status.hardware.name }}</p><dl class="compact-facts"><div><dt>XGBoost</dt><dd>{{ status.hardware.xgboost_version or '未安装' }}</dd></div><div><dt>CUDA 训练</dt><dd>{% if status.hardware.cuda_ready %}<span class="status ok">可用</span>{% else %}<span class="status">不可用</span>{% endif %}</dd></div><div><dt>预测设备</dt><dd>CPU</dd></div></dl><p class="help">训练时按上方选择使用 CPU 或 CUDA；训练完成后日常热点打分固定使用 CPU，减少显存占用。本机不会加载 LLM。</p></section>
 </div>
 
 <div class="analytics-grid">
@@ -61,4 +82,5 @@
 </section>
 
 <section class="panel"><div class="panel-title"><div><h2>训练历史</h2><p class="help">方便比较样本增加后误差是否下降。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>算法 / 设备</th><th>样本</th><th>MAE</th><th>RMSE</th><th>R²</th><th>耗时</th></tr></thead><tbody>{% for item in status.training_history %}{% set m = item.metrics_json %}<tr><td>{{ item.trained_at.strftime('%m-%d %H:%M:%S') }}</td><td>{{ m.algorithm or '—' }} / {{ m.device or '—' }}</td><td>{{ item.sample_count }}</td><td>{{ m.validation_mae if m.validation_mae is not none else '—' }}</td><td>{{ m.validation_rmse if m.validation_rmse is not none else '—' }}</td><td>{{ m.validation_r2 if m.validation_r2 is defined and m.validation_r2 is not none else '—' }}</td><td>{{ m.training_seconds if m.training_seconds is defined else '—' }}</td></tr>{% else %}<tr><td colspan="7" class="muted">还没有训练记录。</td></tr>{% endfor %}</tbody></table></div></section>
+<script src="/static/recommender.js?v=1" defer></script>
 {% endblock %}

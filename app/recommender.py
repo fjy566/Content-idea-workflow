@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import time
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -90,6 +91,8 @@ FEEDBACK_LABELS = {
     "publish": "发布文章",
 }
 
+ProgressCallback = Callable[[dict[str, Any]], None]
+
 
 def feature_vector(db: Session, topic: Topic) -> list[float]:
     age_hours = max(0.0, (utcnow() - as_utc(topic.last_seen_at)).total_seconds() / 3600)
@@ -126,7 +129,13 @@ def feature_vector(db: Session, topic: Topic) -> list[float]:
 
 
 def gpu_status() -> dict[str, Any]:
-    status: dict[str, Any] = {"available": False, "name": "未检测到", "xgboost_cuda": False}
+    status: dict[str, Any] = {
+        "available": False,
+        "name": "未检测到",
+        "xgboost_cuda": False,
+        "cuda_ready": False,
+        "cuda_reason": "未检测到可用于训练的 NVIDIA GPU。",
+    }
     executable = shutil.which("nvidia-smi")
     if executable:
         try:
@@ -140,8 +149,9 @@ def gpu_status() -> dict[str, Any]:
             name = clean_text(completed.stdout.splitlines()[0] if completed.stdout else "", 200)
             if name:
                 status.update({"available": True, "name": name})
+                status["cuda_reason"] = "已检测到 NVIDIA GPU，正在检查 XGBoost CUDA 支持。"
         except (OSError, subprocess.SubprocessError, IndexError):
-            pass
+            status["cuda_reason"] = "无法运行 nvidia-smi，CUDA 训练不可用。"
     try:
         import xgboost as xgb
 
@@ -149,12 +159,23 @@ def gpu_status() -> dict[str, Any]:
         status["xgboost_version"] = xgb.__version__
     except (ImportError, AttributeError):
         status["xgboost_version"] = None
+        status["cuda_reason"] = "未安装支持 CUDA 检测的 XGBoost，当前只能使用 CPU。"
+    if status["available"] and not status["xgboost_cuda"]:
+        status["cuda_reason"] = "当前 XGBoost 未启用 CUDA，安装 GPU 依赖后才能选择 CUDA。"
+    status["cuda_ready"] = bool(status["available"] and status["xgboost_cuda"])
+    if status["cuda_ready"]:
+        status["cuda_reason"] = "CUDA 训练可用。"
     return status
 
 
-def _new_model(prefer_gpu: bool = True):
-    hardware = gpu_status()
-    if prefer_gpu and hardware["available"] and hardware["xgboost_cuda"]:
+def _new_model(requested_device: str = "auto", hardware: dict[str, Any] | None = None):
+    requested_device = requested_device.strip().lower()
+    if requested_device not in {"auto", "cpu", "cuda"}:
+        raise ValueError("训练设备只能选择自动、CPU 或 CUDA。")
+    hardware = hardware or gpu_status()
+    if requested_device == "cuda" and not hardware["cuda_ready"]:
+        raise ValueError(f"当前环境无法使用 CUDA：{hardware['cuda_reason']}")
+    if requested_device in {"auto", "cuda"} and hardware["cuda_ready"]:
         from xgboost import XGBRegressor
 
         return XGBRegressor(
@@ -177,6 +198,44 @@ def _new_model(prefer_gpu: bool = True):
         loss="huber",
         random_state=42,
     ), "GradientBoosting", "CPU"
+
+
+def _notify_progress(
+    callback: ProgressCallback | None,
+    phase: str,
+    progress: float,
+    message: str,
+    **values: Any,
+) -> None:
+    if callback is None:
+        return
+    update = {"phase": phase, "progress": progress, "message": message}
+    update.update(values)
+    callback(update)
+
+
+def _fit_with_fallback(
+    model,
+    algorithm: str,
+    device: str,
+    requested_device: str,
+    hardware: dict[str, Any],
+    train_x: list[list[float]],
+    train_y: list[float],
+    metrics: dict[str, Any],
+    callback: ProgressCallback | None,
+):
+    try:
+        model.fit(train_x, train_y)
+    except Exception as exc:
+        if device != "CUDA" or requested_device == "cuda":
+            raise RuntimeError(f"{device} 训练失败：{exc}") from exc
+        logger.exception("CUDA training failed; falling back to CPU")
+        _notify_progress(callback, "fallback", 35, "CUDA 训练失败，自动切换 CPU 继续训练。", error=str(exc))
+        model, algorithm, device = _new_model("cpu", hardware)
+        metrics.update({"algorithm": algorithm, "device": device, "gpu_fallback": True, "gpu_error": str(exc)})
+        model.fit(train_x, train_y)
+    return model, algorithm, device
 
 
 def _use_cpu_for_prediction(model, training_device: str, metrics: dict[str, Any]) -> None:
@@ -214,14 +273,22 @@ def _training_rows(db: Session) -> tuple[list[list[float]], list[float]]:
     return x, y
 
 
-def train_model(db: Session) -> dict[str, Any]:
+def train_model(
+    db: Session,
+    requested_device: str = "auto",
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
     started = time.perf_counter()
+    requested_device = requested_device.strip().lower()
+    _notify_progress(progress_callback, "preparing", 5, "正在读取真实反馈并整理训练样本。")
     x, y = _training_rows(db)
     if len(x) < 8:
         raise ValueError(f"至少需要 8 个有反馈的不同选题，当前只有 {len(x)} 个")
-    model, algorithm, device = _new_model()
+    hardware = gpu_status()
+    model, algorithm, device = _new_model(requested_device, hardware)
     metrics: dict[str, Any] = {
         "samples": len(x),
+        "requested_device": requested_device,
         "algorithm": algorithm,
         "device": device,
         "feature_count": len(FEATURE_NAMES),
@@ -229,18 +296,32 @@ def train_model(db: Session) -> dict[str, Any]:
         "target_max": round(max(y), 4),
         "target_mean": round(sum(y) / len(y), 4),
     }
+    _notify_progress(
+        progress_callback,
+        "data_ready",
+        15,
+        f"已整理 {len(x)} 个有反馈的不同选题，开始准备训练。",
+        samples=len(x),
+        algorithm=algorithm,
+        device=device,
+    )
     if len(x) >= 12:
+        _notify_progress(progress_callback, "split", 22, "正在划分训练集和验证集。", samples=len(x))
         train_x, test_x, train_y, test_y = train_test_split(x, y, test_size=0.25, random_state=42)
-        try:
-            model.fit(train_x, train_y)
-        except Exception:
-            if device != "CUDA":
-                raise
-            logger.exception("CUDA training failed; falling back to CPU")
-            model, algorithm, device = _new_model(prefer_gpu=False)
-            metrics.update({"algorithm": algorithm, "device": device, "gpu_fallback": True})
-            model.fit(train_x, train_y)
+        _notify_progress(progress_callback, "training", 30, f"正在使用 {device} 训练模型。", device=device)
+        model, algorithm, device = _fit_with_fallback(
+            model,
+            algorithm,
+            device,
+            requested_device,
+            hardware,
+            train_x,
+            train_y,
+            metrics,
+            progress_callback,
+        )
         _use_cpu_for_prediction(model, device, metrics)
+        _notify_progress(progress_callback, "evaluating", 72, "模型训练完成，正在计算验证指标。", device=device)
         predictions = model.predict(test_x)
         baseline_prediction = sum(train_y) / len(train_y)
         baseline_predictions = [baseline_prediction] * len(test_y)
@@ -251,22 +332,35 @@ def train_model(db: Session) -> dict[str, Any]:
         metrics["validation_r2"] = round(float(r2_score(test_y, predictions)), 4)
         metrics["baseline_mae"] = round(float(mean_absolute_error(test_y, baseline_predictions)), 4)
     else:
-        try:
-            model.fit(x, y)
-        except Exception:
-            if device != "CUDA":
-                raise
-            logger.exception("CUDA training failed; falling back to CPU")
-            model, algorithm, device = _new_model(prefer_gpu=False)
-            metrics.update({"algorithm": algorithm, "device": device, "gpu_fallback": True})
-            model.fit(x, y)
+        _notify_progress(progress_callback, "training", 30, f"正在使用 {device} 训练模型。", device=device)
+        model, algorithm, device = _fit_with_fallback(
+            model,
+            algorithm,
+            device,
+            requested_device,
+            hardware,
+            x,
+            y,
+            metrics,
+            progress_callback,
+        )
         _use_cpu_for_prediction(model, device, metrics)
+        _notify_progress(progress_callback, "evaluating", 72, "样本不足以划分独立验证集，正在保存训练结果。", device=device)
         metrics["validation_mae"] = None
         metrics["validation_rmse"] = None
         metrics["validation_r2"] = None
         metrics["baseline_mae"] = None
         metrics["train_samples"] = len(x)
         metrics["validation_samples"] = 0
+    _notify_progress(
+        progress_callback,
+        "evaluation_done",
+        80,
+        "训练指标已计算，正在保存模型并准备更新热点排序。",
+        metrics=metrics,
+        device=device,
+        samples=len(x),
+    )
     importances = getattr(model, "feature_importances_", None)
     if importances is not None:
         ranked = sorted(
@@ -278,6 +372,7 @@ def train_model(db: Session) -> dict[str, Any]:
             {"name": name, "label": FEATURE_LABELS.get(name, name), "importance": round(value * 100.0, 3)}
             for name, value in ranked[:10]
         ]
+    _notify_progress(progress_callback, "scoring", 86, "正在把模型分应用到全部热点。", metrics=metrics, device=device)
     path = settings.model_dir / "topic_recommender.joblib"
     joblib.dump({"model": model, "features": FEATURE_NAMES}, path)
     _apply_model_scores(db, model)
@@ -297,7 +392,9 @@ def train_model(db: Session) -> dict[str, Any]:
     db.flush()
     delete_old_model_artifacts(db, MODEL_NAME, str(path))
     db.commit()
+    _notify_progress(progress_callback, "refreshing", 97, "模型已保存，正在刷新热点排序。", metrics=metrics, device=device)
     refresh_all_topic_scores(db)
+    _notify_progress(progress_callback, "completed", 100, "训练完成，热点排序已更新。", metrics=metrics, device=device)
     return metrics
 
 
