@@ -9,7 +9,7 @@ from ..db import get_db
 from ..models import Source
 from ..repositories import delete_source, list_sources, save_source
 from ..security import validate_public_url
-from ..source_catalog import CHINA_SOURCE_PRESETS, is_china_source_url, seed_china_sources
+from ..source_catalog import CHINA_SOURCE_PRESETS, seed_china_sources
 from ..web import templates
 
 
@@ -52,8 +52,6 @@ def add_source(
         validate_public_url(url)
     except ValueError as exc:
         return RedirectResponse(f"/sources?error={quote_plus(str(exc))}", status_code=303)
-    if not is_china_source_url(url):
-        return RedirectResponse("/sources?error=" + quote_plus("当前版本只允许中国数据源（.cn 或已审核的中国平台域名）"), status_code=303)
     source = Source(
         name=name.strip()[:200],
         kind=kind,

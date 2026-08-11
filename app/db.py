@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from .config import settings
 from .categories import categorize_topic
 from .models import Base, Topic
-from .source_catalog import ensure_china_source_catalog
+from .source_catalog import ensure_default_source_catalog
 
 
 engine = create_engine(
@@ -35,11 +35,11 @@ def init_db() -> None:
     _ensure_compatible_columns()
     db = SessionLocal()
     try:
-        removed, added = ensure_china_source_catalog(db)
-        if removed or added:
+        added = ensure_default_source_catalog(db)
+        if added:
             import logging
 
-            logging.getLogger(__name__).info("China source catalog ready: removed=%s added=%s", removed, added)
+            logging.getLogger(__name__).info("Default Chinese source catalog ready: added=%s", added)
     finally:
         db.close()
 

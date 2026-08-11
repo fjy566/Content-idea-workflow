@@ -4,7 +4,7 @@ def test_base_layout_contains_accessible_operation_overlay():
     source = Path("app/templates/base.html").read_text(encoding="utf-8")
     assert 'id="operation-overlay"' in source
     assert 'role="status"' in source
-    assert "/static/form-loading.js" in source
+    assert "/static/form-loading.js?v=2" in source
 
 
 def test_loading_script_preserves_named_submit_button_before_disabling():
@@ -15,6 +15,8 @@ def test_loading_script_preserves_named_submit_button_before_disabling():
     assert "form.dataset.submitting" in source
     assert "event.preventDefault()" in source
     assert "HTMLFormElement.prototype.submit.call(form)" in source
+    assert 'submitter?.getAttribute("formmethod")' in source
+    assert "submitter?.formMethod" not in source
     assert "}, 80)" in source
 
 

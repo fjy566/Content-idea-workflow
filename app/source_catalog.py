@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Setting, Source, Topic, utcnow
+from .models import Setting, Source, utcnow
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,9 +34,8 @@ CHINA_SOURCE_PRESETS: tuple[SourcePreset, ...] = (
 )
 
 
-# China-based publishers often use .com rather than .cn.  This allowlist lets
-# users add other Chinese feeds while preventing foreign sources from coming
-# back through the source form or a stale database row.
+# China-based publishers often use .com rather than .cn.  This list is useful
+# for catalog checks and tests, but custom user sources are not restricted to it.
 CHINA_SOURCE_HOSTS = frozenset(
     {
         "chinanews.com.cn",
@@ -56,7 +55,8 @@ CHINA_SOURCE_HOSTS = frozenset(
     }
 )
 
-CHINA_SOURCE_MIGRATION_KEY = "china_source_catalog_v2"
+LEGACY_CHINA_SOURCE_MIGRATION_KEY = "china_source_catalog_v2"
+DEFAULT_SOURCE_CATALOG_KEY = "default_source_catalog_v3"
 
 
 def source_hostname(url: str) -> str:
@@ -100,39 +100,27 @@ def _seed_missing_sources(db: Session) -> int:
     return added
 
 
-def _reset_orphan_topic_stats(db: Session) -> None:
-    """Keep article history, but stop source-less historical topics entering the radar."""
-    for topic in db.scalars(select(Topic).where(~Topic.item_links.any())).all():
-        topic.item_count = 0
-        topic.source_count = 0
-        topic.source_velocity = 0.0
+def ensure_default_source_catalog(db: Session) -> int:
+    """Seed Chinese defaults only for a genuinely fresh installation.
 
-
-def ensure_china_source_catalog(db: Session) -> tuple[int, int]:
-    """Remove foreign sources and seed the verified Chinese catalog once.
-
-    The app is a local single-user tool, so a startup migration is simpler and
-    more reliable than requiring a separate migration command.  Existing
-    articles and topics are preserved; only foreign source rows and their raw
-    crawl items are removed.
+    Startup must never remove, disable, or rewrite a source chosen by the user.
+    Existing installations from the previous catalog migration are also left
+    untouched, including installations where the user intentionally removed
+    every source.
     """
-    removed = 0
-    for source in db.scalars(select(Source)).all():
-        if not is_china_source_url(source.url):
-            db.delete(source)
-            removed += 1
-    db.flush()
-
-    marker = db.get(Setting, CHINA_SOURCE_MIGRATION_KEY)
-    added = _seed_missing_sources(db) if marker is None else 0
+    marker = db.get(Setting, DEFAULT_SOURCE_CATALOG_KEY)
+    added = 0
     if marker is None:
-        db.add(Setting(key=CHINA_SOURCE_MIGRATION_KEY, value=utcnow().isoformat()))
+        legacy_marker = db.get(Setting, LEGACY_CHINA_SOURCE_MIGRATION_KEY)
+        has_sources = db.scalar(select(Source.id).limit(1)) is not None
+        if legacy_marker is None and not has_sources:
+            added = _seed_missing_sources(db)
+        db.add(Setting(key=DEFAULT_SOURCE_CATALOG_KEY, value=utcnow().isoformat()))
     image_provider = db.get(Setting, "image_search_provider")
     if image_provider is not None and image_provider.value != "360":
         image_provider.value = "360"
-    _reset_orphan_topic_stats(db)
     db.commit()
-    return removed, added
+    return added
 
 
 def seed_china_sources(db: Session) -> int:

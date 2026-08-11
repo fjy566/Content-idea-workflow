@@ -52,8 +52,11 @@
         elapsed += 1;
         seconds.textContent = String(elapsed);
       }, 1000);
-      const targetAction = submitter?.formAction;
-      const targetMethod = submitter?.formMethod;
+      // Only a button with explicit form* attributes may override its form.
+      // Reading submitter.formMethod here returns the browser default (GET)
+      // for an ordinary button and used to turn article POSTs into GETs.
+      const targetAction = submitter?.getAttribute("formaction");
+      const targetMethod = submitter?.getAttribute("formmethod");
       window.setTimeout(() => {
         if (targetAction) form.action = targetAction;
         if (targetMethod) form.method = targetMethod;

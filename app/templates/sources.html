@@ -13,7 +13,7 @@
 {% if request.query_params.get('notice') %}<div class="alert success">{{ request.query_params.get('notice') }}</div>{% endif %}
 
 <section class="panel china-source-panel">
-  <div class="panel-title"><div><h2>中国精选数据源</h2><p class="help">系统已限制为中国媒体与中国科技社区来源，不再接受外国域名。你可以一键补充缺失的精选 RSS。</p></div><form method="post" action="/sources/seed-china"><button class="button primary" type="submit">补充中国精选源</button></form></div>
+  <div class="panel-title"><div><h2>中国精选数据源</h2><p class="help">全新安装默认只加入中国媒体与科技社区来源。启动程序不会删除、停用或修改你自己添加的数据源；需要时可一键补充缺失的精选 RSS。</p></div><form method="post" action="/sources/seed-china"><button class="button primary" type="submit">补充中国精选源</button></form></div>
   <div class="source-preset-list">{% for preset in china_source_presets %}<span class="source-preset-chip"><strong>{{ preset.name }}</strong><small>{{ preset.url }}</small></span>{% endfor %}</div>
 </section>
 
