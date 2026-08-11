@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}数据源 · 选题工作台{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">SOURCE REGISTRY</p>
+    <h1>数据源</h1>
+    <p class="muted">优先添加公开 RSS/API；HTML 数据源需要按页面结构填写 CSS 选择器。</p>
+  </div>
+</section>
+
+{% if request.query_params.get('error') %}<div class="alert error">{{ request.query_params.get('error') }}</div>{% endif %}
+{% if request.query_params.get('notice') %}<div class="alert success">{{ request.query_params.get('notice') }}</div>{% endif %}
+
+<section class="panel china-source-panel">
+  <div class="panel-title"><div><h2>中国精选数据源</h2><p class="help">系统已限制为中国媒体与中国科技社区来源，不再接受外国域名。你可以一键补充缺失的精选 RSS。</p></div><form method="post" action="/sources/seed-china"><button class="button primary" type="submit">补充中国精选源</button></form></div>
+  <div class="source-preset-list">{% for preset in china_source_presets %}<span class="source-preset-chip"><strong>{{ preset.name }}</strong><small>{{ preset.url }}</small></span>{% endfor %}</div>
+</section>
+
+<section class="panel">
+  <h2>添加真实数据源</h2>
+  <form method="post" action="/sources/add" class="form-grid">
+    <label>名称<input name="name" required placeholder="例如：某媒体科技 RSS"></label>
+    <label>类型<select name="kind"><option value="rss">RSS / Atom</option><option value="html">静态 HTML</option><option value="html_js">动态 HTML（需 Playwright）</option></select></label>
+    <label class="wide">地址<input name="url" type="url" required placeholder="https://example.com/feed.xml"></label>
+    <label>采集间隔（分钟）<input name="interval_minutes" type="number" min="5" max="1440" value="30"></label>
+    <label>条目选择器<input name="item_selector" placeholder="article, .item"></label>
+    <label>标题选择器<input name="title_selector" placeholder="h2, .title"></label>
+    <label>链接选择器<input name="link_selector" placeholder="a[href]"></label>
+    <label>摘要选择器<input name="summary_selector" placeholder=".summary, p"></label>
+    <label>发布时间选择器<input name="published_selector" placeholder="time, .date"></label>
+    <div class="wide"><button class="button primary" type="submit">保存数据源</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>已配置数据源</h2>
+  {% if sources %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>名称</th><th>类型</th><th>地址</th><th>状态</th><th>最近结果</th><th></th></tr></thead>
+    <tbody>
+      {% for source in sources %}
+      <tr>
+        <td>{{ source.name }}</td><td>{{ source.kind }}</td>
+        <td class="url-cell"><a href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a></td>
+        <td>{% if source.enabled %}<span class="status ok">启用</span>{% else %}<span class="status">停用</span>{% endif %}</td>
+        <td>{% if source.last_error %}<span class="status error">失败：{{ source.last_error[:80] }}</span>{% elif source.last_success_at %}{{ source.last_success_at.strftime('%m-%d %H:%M') }}{% else %}未采集{% endif %}</td>
+        <td class="actions">
+          <form method="post" action="/sources/{{ source.id }}/toggle"><button class="link-button" type="submit">{% if source.enabled %}停用{% else %}启用{% endif %}</button></form>
+          <form method="post" action="/sources/{{ source.id }}/delete" onsubmit="return confirm('删除这个数据源及其已采集内容？')"><button class="link-button danger-text" type="submit">删除</button></form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="muted">暂无数据源。添加后才会开始采集。</p>{% endif %}
+</section>
+{% endblock %}

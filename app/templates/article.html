@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}编辑文章 · 选题工作台{% endblock %}
+{% block content %}
+<div class="button-row article-back-row"><a class="back-link" href="/articles">← 返回文章库</a><a class="back-link" href="/topics/{{ article.topic_id }}">查看来源选题</a></div>
+{% if notice %}<div class="alert {% if '失败' in notice %}error{% else %}success{% endif %}">{{ notice }}</div>{% endif %}
+<section class="page-header editor-page-header"><div><p class="eyebrow">MARKDOWN ARTICLE EDITOR</p><h1>图文文章编辑</h1><p class="muted">你可以直接点击工具按钮排版；图片先进入素材库，再选择插入光标、某个章节或正文位置。</p></div><div class="editor-quick-note"><strong>不会丢稿</strong><span>编辑中的内容会临时保存在本机浏览器，不会自动调用 AI。</span></div></section>
+
+<div id="local-draft-banner" class="local-draft-banner" hidden role="status" aria-live="polite">
+  <div><strong>发现本机未保存版本</strong><span id="local-draft-meta">这份版本只保存在当前浏览器。</span></div>
+  <div class="button-row"><button class="button primary" id="restore-local-draft" type="button">恢复本地版本</button><button class="button" id="dismiss-local-draft" type="button">暂不恢复</button></div>
+</div>
+
+<form id="article-editor-form" method="post" action="/articles/{{ article.id }}/save" class="panel editor-form illustrated-editor" data-autosave-url="/articles/{{ article.id }}/autosave" data-loading data-loading-title="正在保存文章" data-loading-detail="正在保存标题、Markdown 正文和文章状态，完成后会返回当前文章。">
+  <div class="editor-meta-grid">
+    <label>标题<input id="article-title" name="title" value="{{ article.title }}" required></label>
+    <label>状态<select id="article-status" name="status"><option value="draft" {% if article.status == 'draft' %}selected{% endif %}>草稿</option><option value="ready" {% if article.status == 'ready' %}selected{% endif %}>待发布</option><option value="published" {% if article.status == 'published' %}selected{% endif %}>已发布</option></select></label>
+  </div>
+
+  <div class="editor-toolbar" role="toolbar" aria-label="文章排版工具">
+    <div class="toolbar-group"><span class="toolbar-label">格式</span><button class="toolbar-button" type="button" data-editor-command="h1" title="插入一级标题">H1</button><button class="toolbar-button" type="button" data-editor-command="h2" title="插入二级标题">H2</button><button class="toolbar-button" type="button" data-editor-command="h3" title="插入三级标题">H3</button></div>
+    <div class="toolbar-group"><button class="toolbar-button toolbar-symbol" type="button" data-editor-command="bold" title="加粗（Ctrl/Cmd+B）"><strong>B</strong></button><button class="toolbar-button toolbar-symbol" type="button" data-editor-command="italic" title="斜体（Ctrl/Cmd+I）"><em>I</em></button><button class="toolbar-button" type="button" data-editor-command="strike" title="删除线">删除线</button><button class="toolbar-button" type="button" data-editor-command="quote" title="插入引用">引用</button><button class="toolbar-button" type="button" data-editor-command="ul" title="无序列表">• 列表</button><button class="toolbar-button" type="button" data-editor-command="ol" title="有序列表">1. 列表</button><button class="toolbar-button" type="button" data-editor-command="link" title="插入链接">链接</button><button class="toolbar-button" type="button" data-editor-command="code" title="插入代码">代码</button><button class="toolbar-button" type="button" data-editor-command="table" title="插入表格">表格</button><button class="toolbar-button" type="button" data-editor-command="callout" title="插入提示框">提示</button><button class="toolbar-button" type="button" data-editor-command="hr" title="插入分隔线">分隔线</button></div>
+    <div class="toolbar-group"><span class="toolbar-label">历史</span><button class="toolbar-button" type="button" data-editor-command="undo" title="撤销（Ctrl/Cmd+Z）">撤销</button><button class="toolbar-button" type="button" data-editor-command="redo" title="重做（Ctrl/Cmd+Shift+Z）">重做</button></div>
+    <div class="toolbar-group toolbar-view-group" aria-label="预览方式"><span class="toolbar-label">查看</span><button class="toolbar-button is-active" type="button" data-view-mode="split" aria-pressed="true">分栏</button><button class="toolbar-button" type="button" data-view-mode="edit" aria-pressed="false">只编辑</button><button class="toolbar-button" type="button" data-view-mode="preview" aria-pressed="false">只预览</button></div>
+  </div>
+
+  <div class="editor-workspace view-split" id="editor-workspace">
+    <section class="markdown-editor-pane" aria-label="Markdown 正文编辑区">
+      <div class="editor-pane-heading"><div><strong>正文</strong><span>选中文字后点工具按钮即可排版</span></div><span id="editor-stats">统计中…</span></div>
+      <label class="sr-only" for="article-content">Markdown 正文</label>
+      <textarea id="article-content" name="content" rows="34" required data-preview-url="/articles/{{ article.id }}/preview">{{ article.content }}</textarea>
+      <div class="editor-bottom-tools"><button class="link-button" id="toggle-markdown-help" type="button" aria-expanded="false">打开 Markdown 小抄</button><span id="editor-state">已加载；修改后会自动保存</span></div>
+      <div id="markdown-help" class="markdown-help" hidden><strong>常用写法</strong><span><code># 标题</code>　<code>**重点**</code>　<code>~~删除线~~</code>　<code>- 列表项</code>　<code>&gt; 引用</code>　<code>| 表格 |</code>　<code>[文字](链接)</code></span><small>图片请从下方素材库插入。先把光标放进正文，再点“插入到当前光标”；即使按钮被点击，系统也会记住你最后一次正文光标。</small></div>
+    </section>
+    <section class="markdown-preview-pane" aria-live="polite" aria-label="Markdown 实时预览"><div class="preview-heading"><div><strong>实时预览</strong><span id="preview-state">已同步</span></div><span class="preview-tip">安全渲染 Markdown</span></div><article id="markdown-preview" class="markdown-body">{{ preview_html }}</article></section>
+  </div>
+  <div class="editor-savebar"><div><span id="save-state">修改会先保存在本机，服务器每 30 秒自动保存</span><span class="save-model">模型：{{ article.model or '未记录' }}</span></div><button class="button primary" type="submit">保存文章</button></div>
+</form>
+
+<section class="panel image-library">
+  <div class="panel-title"><div><h2>图片素材库</h2><p class="help">搜索或生成可以一次拿到多张图片。当前搜索源：<strong>{{ image_search_provider_label|default('360 图片（中国搜索）', true) }}</strong>。图片会先进入本地素材库，再由你决定插入位置；搜索结果不代表已获得发布授权。</p></div><span class="source-count">{{ article.images|length }} 张</span></div>
+  <form method="post" action="/articles/{{ article.id }}/image" class="form-grid image-create-form" data-loading data-loading-title="正在处理文章配图" data-loading-detail="系统会逐张搜索或生成图片并放入素材库，多张图片需要更长时间，请勿重复点击。">
+    <label class="wide">图片说明或搜索词<textarea name="prompt" rows="3" required placeholder="例如：中国人工智能芯片，数据中心，科技新闻摄影"></textarea></label>
+    <label>数量<select name="quantity">{% for count in range(1, 7) %}<option value="{{ count }}">{{ count }} 张</option>{% endfor %}</select></label>
+    <label>获取后插入到<select name="insert_position"><option value="library">只加入素材库</option><option value="auto" selected>自动均匀排版</option><option value="start">正文开头</option><option value="after_first">第一段后</option><option value="middle">正文中部</option><option value="end">正文结尾</option></select></label>
+    <div class="wide button-row"><button class="button" name="mode" value="search" type="submit" data-loading-text="正在搜图…">从 {{ image_search_provider_label|default('360 图片（中国搜索）', true) }} 搜图</button><button class="button primary" name="mode" value="ai" type="submit" data-loading-text="图片生成中…" {% if not image_configured %}disabled title="请先配置图片 API"{% endif %}>调用图片 API 生成</button></div>
+  </form>
+
+  {% if article.images %}
+  <div class="image-grid material-grid">
+    {% for image in article.images %}
+    <figure class="material-card" id="image-{{ image.id }}" data-image-card data-image-id="{{ image.id }}" data-image-inserted="{{ 'true' if image_inserted[image.id] else 'false' }}">
+      <div class="material-image-wrap"><img src="/media/{{ image.file_path }}" alt="文章配图：{{ image.prompt[:80] }}">{% if image_inserted[image.id] %}<span class="inserted-badge">已在正文</span>{% endif %}</div>
+      <figcaption><strong>{{ image.provider or '配图' }}</strong> · {{ image.created_at.strftime('%Y-%m-%d %H:%M') }}{% if image.attribution %}<br>{{ image.attribution }}{% endif %}{% if image.source_url %}<br><a href="{{ image.source_url }}" target="_blank" rel="noreferrer">查看原图与许可</a>{% endif %}</figcaption>
+      <div class="material-actions">
+        <div class="material-action-row"><button class="button insert-at-cursor" type="button" data-image-id="{{ image.id }}" {% if image_inserted[image.id] %}disabled{% endif %}>插入到当前光标</button><button class="button" type="button" data-copy-image="{{ image.id }}">复制 Markdown</button></div>
+        <div class="material-position-row"><label>插入位置<select class="image-position-select" data-image-id="{{ image.id }}"><option value="cursor">当前光标</option><option value="start">正文开头</option><option value="after_first">第一段后</option><option value="middle">正文中部</option><option value="end">正文结尾</option></select></label><button class="button primary insert-selected-image" type="button" data-image-id="{{ image.id }}" {% if image_inserted[image.id] %}disabled{% endif %}>插入</button></div>
+        <details class="server-insert-fallback"><summary>使用服务器位置插入</summary><form method="post" action="/articles/{{ article.id }}/images/{{ image.id }}/insert"><select name="position" aria-label="服务器插入位置"><option value="start">开头</option><option value="after_first">第一段后</option><option value="middle">中部</option><option value="end" selected>结尾</option></select><button class="button" type="submit" {% if image_inserted[image.id] %}disabled{% endif %}>插入并刷新</button></form></details>
+      </div>
+    </figure>
+    {% endfor %}
+  </div>
+  {% else %}<p class="muted">还没有图片。先输入一个具体的搜索词，例如“国产 AI 芯片 数据中心”，再选择从中国搜索源搜图。</p>{% endif %}
+</section>
+<script id="article-image-data" type="application/json">{{ image_payload|tojson }}</script>
+<script src="/static/article-editor.js" defer></script>
+{% endblock %}

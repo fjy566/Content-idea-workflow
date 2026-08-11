@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "content-idea-workflow"
+version = "0.1.0"
+description = "A local content topic discovery and recommendation platform"
+requires-python = ">=3.11"
+dependencies = [
+  "APScheduler>=3.10,<4",
+  "beautifulsoup4>=4.12,<5",
+  "feedparser>=6.0,<7",
+  "fastapi>=0.115,<1",
+  "httpx>=0.27,<1",
+  "jinja2>=3.1,<4",
+  "joblib>=1.4,<2",
+  "jieba>=0.42,<1",
+  "markdown-it-py>=4,<5",
+  "python-dateutil>=2.9,<3",
+  "python-dotenv>=1.0,<2",
+  "python-multipart>=0.0.9,<1",
+  "scikit-learn>=1.5,<2",
+  "sqlalchemy>=2.0,<3",
+  "tenacity>=9,<10",
+  "uvicorn[standard]>=0.30,<1",
+]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.45,<2"]
+gpu = ["xgboost>=2.1,<4"]
+dev = [
+  "pytest>=8,<9",
+  "pytest-asyncio>=0.23,<1",
+  "respx>=0.21,<1",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

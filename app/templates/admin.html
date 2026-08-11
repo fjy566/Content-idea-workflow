@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}采集任务 · 选题工作台{% endblock %}
+{% block head_extra %}{% if active_run %}<meta http-equiv="refresh" content="2">{% endif %}{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div><p class="eyebrow">采集控制台</p><h1>选择这次要采集的数据源</h1><p class="muted">打勾只影响本次手动采集；已停用的数据源不会被自动任务或手动任务采集。</p></div>
+  <a class="button" href="/sources">管理数据源</a>
+</section>
+
+{% if request.query_params.get('message') %}<div class="alert success">{{ request.query_params.get('message') }}</div>{% endif %}
+{% if request.query_params.get('error') %}<div class="alert error">{{ request.query_params.get('error') }}</div>{% endif %}
+
+{% if active_run %}
+<section class="panel run-progress" aria-live="polite">
+  {% set percent = ((active_run.processed_sources / active_run.total_sources * 100) if active_run.total_sources else 0)|round|int %}
+  <div class="panel-title"><div><p class="eyebrow">正在运行</p><h2>第 {{ active_run.id }} 轮 · {{ active_run.processed_sources }}/{{ active_run.total_sources }} 个来源</h2></div><strong>{{ percent }}%</strong></div>
+  <progress value="{{ active_run.processed_sources }}" max="{{ active_run.total_sources or 1 }}">{{ percent }}%</progress>
+  <p class="help">页面每 2 秒自动刷新。当前已新增 {{ active_run.new_items }} 条，失败 {{ active_run.error_count }} 个来源。</p>
+</section>
+{% endif %}
+
+<form method="post" action="/admin/crawl" class="panel crawl-console">
+  <div class="panel-title">
+    <div><h2>本次采集范围</h2><p class="help">默认选中所有已启用数据源，你可以取消不想运行的来源。</p></div>
+    <button class="button primary" type="submit" {% if active_run %}disabled{% endif %}>开始一轮采集</button>
+  </div>
+  <div class="source-selector">
+    {% for source in sources %}
+    <label class="source-choice {% if not source.enabled %}disabled{% endif %}">
+      <input type="checkbox" name="source_ids" value="{{ source.id }}" {% if source.enabled %}checked{% else %}disabled{% endif %}>
+      <span class="source-choice-copy">
+        <strong>{{ source.name }}</strong>
+        <small>{% if source.enabled %}已启用{% else %}已停用{% endif %} · {{ source.last_crawled_at.strftime('%m-%d %H:%M') if source.last_crawled_at else '从未采集' }}</small>
+        {% if source.last_error %}<em>{{ source.last_error|truncate(70, true, '…') }}</em>{% endif %}
+      </span>
+    </label>
+    {% else %}<p class="muted">暂无数据源，请先添加。</p>{% endfor %}
+  </div>
+</form>
+
+<section class="panel">
+  <div class="panel-title"><div><h2>采集日志</h2><p class="help">每次只运行一轮。日志只记录采集，不会触发 AI 或消耗 Token。</p></div><form method="post" action="/admin/logs/clear" onsubmit="return confirm('清空所有已完成轮次的采集日志？')"><button class="button" type="submit">清空历史日志</button></form></div>
+  <div class="crawl-log" role="log">
+    {% for log in logs %}<div class="log-line {{ log.level }}"><time>{{ log.created_at.strftime('%m-%d %H:%M:%S') }}</time><b>#{{ log.run_id }}</b>{% if log.source_name %}<strong>{{ log.source_name }}</strong>{% endif %}<span>{{ log.message }}</span></div>{% else %}<p class="muted">还没有采集日志。</p>{% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-title"><div><h2>AI 任务记录</h2><p class="help">只有你点击下方按钮、热点详情页的“生成推荐”或文章生成按钮时才会消耗 Token。</p></div><form method="post" action="/admin/analyze" onsubmit="return confirm('这会调用你配置的聊天模型，最多分析 10 条热点并消耗 Token，继续吗？')"><button class="button" type="submit">生成 10 条 AI 推荐（消耗 Token）</button></form></div>
+  <div class="table-wrap"><table><thead><tr><th>时间</th><th>类型</th><th>模型</th><th>状态</th><th>错误</th></tr></thead><tbody>{% for task in tasks %}<tr><td>{{ task.created_at.strftime('%m-%d %H:%M:%S') }}</td><td>{{ task.task_type }}</td><td>{{ task.model or '' }}</td><td>{{ task.status }}</td><td class="danger-text">{{ task.error_message or '' }}</td></tr>{% else %}<tr><td colspan="5" class="muted">暂无 AI 任务。</td></tr>{% endfor %}</tbody></table></div>
+</section>
+{% endblock %}

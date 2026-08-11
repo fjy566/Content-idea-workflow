@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Content Idea Workflow{% endblock %}</title>
+  {% block head_extra %}{% endblock %}
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/enhancements.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">选题工作台</a>
+      <nav>
+        <a href="/">热点</a>
+        <a href="/articles">文章库</a>
+        <a href="/sources">数据源</a>
+        <a href="/recommender">推荐模型</a>
+        <a href="/admin">任务</a>
+        <a href="/settings">设置</a>
+      </nav>
+    </div>
+  </header>
+  <main class="page-shell">
+    {% block content %}{% endblock %}
+  </main>
+  <div id="operation-overlay" class="operation-overlay" hidden role="status" aria-live="assertive" aria-busy="true">
+    <div class="operation-dialog">
+      <div class="operation-spinner" aria-hidden="true"></div>
+      <p class="eyebrow">任务正在执行</p>
+      <h2 id="operation-title">正在处理，请稍候</h2>
+      <p id="operation-detail">模型响应需要一些时间，请不要重复点击或关闭页面。</p>
+      <div class="operation-progress"><span></span></div>
+      <p class="operation-elapsed">已等待 <strong id="operation-seconds">0</strong> 秒</p>
+    </div>
+  </div>
+  <script src="/static/form-loading.js" defer></script>
+</body>
+</html>

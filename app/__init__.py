@@ -1,0 +1,2 @@
+"""Content Idea Workflow application."""
+

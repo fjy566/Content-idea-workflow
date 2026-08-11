@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}文章库 · 选题工作台{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div><p class="eyebrow">ARTICLE LIBRARY</p><h1>文章库</h1><p class="muted">生成和保存过的文章都在这里。状态是你的工作流，不会自动发布到外部平台。</p></div>
+  <a class="button" href="/">寻找新选题</a>
+</section>
+
+<form class="searchbar" method="get" action="/articles">
+  <input name="q" value="{{ q }}" placeholder="搜索文章标题、正文或来源热点">
+  {% if active_status %}<input type="hidden" name="status" value="{{ active_status }}">{% endif %}
+  <button class="button" type="submit">搜索</button>
+</form>
+
+<nav class="article-status-tabs" aria-label="文章状态">
+  <a class="status-tab {% if not active_status %}active{% endif %}" href="/articles?q={{ q|urlencode }}"><span>全部</span><strong>{{ total_count }}</strong></a>
+  {% for key, label in status_labels.items() %}<a class="status-tab status-{{ key }} {% if active_status == key %}active{% endif %}" href="/articles?status={{ key }}&q={{ q|urlencode }}"><span>{{ label }}</span><strong>{{ status_counts[key] }}</strong></a>{% endfor %}
+</nav>
+
+{% if articles %}
+<section class="article-library-list" aria-label="文章列表">
+  {% for article in articles %}
+  <article class="article-library-card">
+    <a class="article-card-main" href="/articles/{{ article.id }}">
+      <div class="article-card-heading"><span class="article-status status-{{ article.status }}">{{ status_labels.get(article.status, article.status) }}</span><time>{{ article.updated_at.strftime('%Y-%m-%d %H:%M') }}</time></div>
+      <h2>{{ article.title }}</h2>
+      <p>{{ (article.content|striptags)|truncate(180, true, '…') }}</p>
+      <div class="article-card-meta"><span>来源：{{ article.topic.title|truncate(55, true, '…') }}</span><span>{{ article.content|length }} 字符</span><span>{{ article.images|length }} 张图片</span><span>{{ article.model or '未记录模型' }}</span></div>
+    </a>
+    <a class="button" href="/articles/{{ article.id }}">继续编辑</a>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="empty-state"><div class="empty-icon">▤</div><h2>{% if q or active_status %}没有符合条件的文章{% else %}还没有文章{% endif %}</h2><p>{% if q or active_status %}换一个状态或关键词试试。{% else %}打开一个热点，选择角度后生成第一篇初稿。{% endif %}</p><a class="button primary" href="/">去选热点</a></section>
+{% endif %}
+{% endblock %}

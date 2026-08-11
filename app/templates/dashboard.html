@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}热点选题 · 选题工作台{% endblock %}
+{% block content %}
+<section class="page-header">
+  <div>
+    <p class="eyebrow">今日选题雷达</p>
+    <h1>先扫标题，再挑值得写的</h1>
+    <p class="muted">点击感兴趣的热点，查看来源并让 AI 给出具体选题角度。</p>
+  </div>
+  <a class="button primary" href="/admin">运行采集</a>
+</section>
+
+<form class="searchbar" method="get" action="/">
+  <input name="q" value="{{ q }}" placeholder="搜索热点标题或摘要">
+  {% if active_category %}<input type="hidden" name="category" value="{{ active_category }}">{% endif %}
+  <button class="button" type="submit">搜索</button>
+</form>
+
+<nav class="category-filter" aria-label="热点分类">
+  <a class="category-pill {% if not active_category %}active{% endif %}" href="/?q={{ q|urlencode }}">全部 <span>{{ category_counts.values()|sum }}</span></a>
+  {% for name in category_options %}
+  <a class="category-pill {% if active_category == name %}active{% endif %}" href="/?category={{ name|urlencode }}&q={{ q|urlencode }}">{{ name }} <span>{{ category_counts[name] }}</span></a>
+  {% endfor %}
+</nav>
+
+{% if topics %}
+<section class="topic-list" aria-label="热点选题列表">
+  {% for topic in topics %}
+    {% include "partials/topic_card.html" %}
+  {% endfor %}
+</section>
+<nav class="pagination-bar" aria-label="热点分页">
+  <span>第 {{ page }} / {{ total_pages }} 页，共 {{ total_count }} 条</span>
+  <div class="button-row">
+    {% if page > 1 %}<a class="button" href="/?q={{ q|urlencode }}&category={{ active_category|urlencode }}&page={{ page - 1 }}">上一页</a>{% else %}<span class="button disabled">上一页</span>{% endif %}
+    {% if page < total_pages %}<a class="button primary" href="/?q={{ q|urlencode }}&category={{ active_category|urlencode }}&page={{ page + 1 }}">下一页</a>{% else %}<span class="button disabled">下一页</span>{% endif %}
+  </div>
+</nav>
+{% else %}
+<section class="empty-state">
+  <div class="empty-icon">◌</div>
+  <h2>{% if active_category or q %}没有符合条件的热点{% else %}还没有热点数据{% endif %}</h2>
+  <p>{% if active_category or q %}换一个分类或搜索词试试。{% else %}先添加数据源，再到“任务”页面运行采集。{% endif %}</p>
+  <a class="button primary" href="{% if active_category or q %}/{% else %}/sources{% endif %}">{% if active_category or q %}查看全部{% else %}添加数据源{% endif %}</a>
+</section>
+{% endif %}
+{% endblock %}

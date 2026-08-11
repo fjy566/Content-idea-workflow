@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}推荐模型数据 · 选题工作台{% endblock %}
+{% block content %}
+<section class="page-header"><div><p class="eyebrow">PERSONAL RANKING DATA</p><h1>推荐模型数据看板</h1><p class="muted">这里展示真实反馈、训练效果和当前排序结果。本地训练不调用大模型，不消耗 API Token。</p></div></section>
+{% if message %}<div class="alert {% if '完成' in message %}success{% else %}error{% endif %}">{{ message }}</div>{% endif %}
+<div class="model-quality-note {% if status.artifact and status.artifact.metrics_json.validation_r2 is not none and status.artifact.metrics_json.validation_r2 < 0 %}warning{% endif %}"><strong>如何理解当前模型：</strong>{{ status.quality_note }}</div>
+
+<section class="data-summary-grid" aria-label="训练数据概况">
+  <div><span>热点总数</span><strong>{{ status.topic_count }}</strong><small>当前数据库</small></div>
+  <div><span>反馈事件</span><strong>{{ status.feedback_event_count }}</strong><small>全部真实操作</small></div>
+  <div><span>训练选题</span><strong>{{ status.sample_count }}</strong><small>至少需要 8 个</small></div>
+  <div><span>数据覆盖率</span><strong>{{ status.coverage_percent }}%</strong><small>有反馈选题 / 全部热点</small></div>
+</section>
+
+<div class="model-grid">
+  <section class="panel model-status">
+    <div class="panel-title"><div><h2>最近一次训练</h2><p class="help">每次训练都会使用目前所有真实反馈。</p></div>{% if status.trained %}<span class="status ok">模型已加载</span>{% else %}<span class="status">规则评分中</span>{% endif %}</div>
+    {% if status.artifact %}{% set metrics = status.artifact.metrics_json %}
+    <dl class="metric-list expanded-metrics">
+      <div><dt>算法</dt><dd>{{ metrics.algorithm }}</dd></div><div><dt>训练设备</dt><dd>{{ metrics.device }}</dd></div><div><dt>训练耗时</dt><dd>{{ metrics.training_seconds if metrics.training_seconds is defined else '—' }} 秒</dd></div>
+      <div><dt>训练样本</dt><dd>{{ metrics.train_samples if metrics.train_samples is defined else metrics.samples }}</dd></div><div><dt>验证样本</dt><dd>{{ metrics.validation_samples if metrics.validation_samples is defined else '—' }}</dd></div><div><dt>特征数量</dt><dd>{{ metrics.feature_count }}</dd></div>
+      <div><dt>验证 MAE</dt><dd>{{ metrics.validation_mae if metrics.validation_mae is not none else '—' }}</dd></div><div><dt>验证 RMSE</dt><dd>{{ metrics.validation_rmse if metrics.validation_rmse is not none else '—' }}</dd></div><div><dt>验证 R²</dt><dd>{{ metrics.validation_r2 if metrics.validation_r2 is defined and metrics.validation_r2 is not none else '—' }}</dd></div>
+      <div><dt>基线 MAE</dt><dd>{{ metrics.baseline_mae if metrics.baseline_mae is defined and metrics.baseline_mae is not none else '—' }}</dd></div><div><dt>目标均值</dt><dd>{{ metrics.target_mean if metrics.target_mean is defined else '—' }}</dd></div><div><dt>目标范围</dt><dd>{{ metrics.target_min if metrics.target_min is defined else '—' }}–{{ metrics.target_max if metrics.target_max is defined else '—' }}</dd></div>
+    </dl>
+    <p class="muted">训练时间：{{ status.artifact.trained_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+    {% else %}<p class="muted">积累至少 8 个不同选题的反馈后才能训练。还需要 {{ status.samples_needed }} 个。</p>{% endif %}
+    <form method="post" action="/recommender/train" data-loading data-loading-title="正在训练本地推荐模型" data-loading-detail="正在整理真实反馈、使用 RTX/CPU 训练并重新计算全部热点分数，通常需要数秒到一分钟。"><button class="button primary" type="submit" data-loading-text="模型训练中…">用全部真实反馈训练/更新</button></form>
+  </section>
+  <section class="panel hardware-card"><h2>硬件与运行方式</h2><p class="gpu-name">{{ status.hardware.name }}</p><dl class="compact-facts"><div><dt>XGBoost</dt><dd>{{ status.hardware.xgboost_version or '未安装' }}</dd></div><div><dt>CUDA</dt><dd>{% if status.hardware.xgboost_cuda %}<span class="status ok">可用</span>{% else %}<span class="status">不可用</span>{% endif %}</dd></div><div><dt>预测设备</dt><dd>CPU</dd></div></dl><p class="help">GPU 负责训练；日常热点打分使用 CPU，减少显存占用。本机不会加载 LLM。</p></section>
+</div>
+
+<div class="analytics-grid">
+  <section class="panel">
+    <div class="panel-title"><div><h2>反馈构成</h2><p class="help">次数是实际操作量，权重表示该动作对训练目标的影响。</p></div></div>
+    {% set max_feedback = status.feedback_breakdown|map(attribute='count')|max %}
+    <div class="data-bar-list">{% for item in status.feedback_breakdown %}<div class="data-bar-row"><span>{{ item.label }}</span><div class="data-bar-track"><i style="width:{{ (item.count / (max_feedback or 1) * 100)|round }}%"></i></div><strong>{{ item.count }}</strong><small>权重 {{ '%+g'|format(item.weight) }}</small></div>{% endfor %}</div>
+  </section>
+  <section class="panel">
+    <div class="panel-title"><div><h2>训练样本分类</h2><p class="help">检查你的反馈是否只集中在单一内容类型。</p></div></div>
+    {% set max_category = status.category_breakdown|map(attribute='count')|max %}
+    <div class="data-bar-list compact">{% for item in status.category_breakdown %}<div class="data-bar-row"><span>{{ item.name }}</span><div class="data-bar-track"><i style="width:{{ (item.count / (max_category or 1) * 100)|round }}%"></i></div><strong>{{ item.count }}</strong></div>{% endfor %}</div>
+  </section>
+</div>
+
+<div class="analytics-grid">
+  <section class="panel">
+    <div class="panel-title"><div><h2>模型分数分布</h2><p class="help">已评分 {{ status.score_count }} 条{% if status.unscored_count %} · 新增待评分 {{ status.unscored_count }} 条（训练后覆盖）{% endif %} · 平均 {{ status.score_mean if status.score_mean is not none else '—' }} · 最低 {{ status.score_min if status.score_min is not none else '—' }} · 最高 {{ status.score_max if status.score_max is not none else '—' }}</p></div></div>
+    {% set max_bucket = status.score_buckets|map(attribute='count')|max %}
+    <div class="distribution-chart">{% for bucket in status.score_buckets %}<div><span class="distribution-value">{{ bucket.count }}</span><i style="height:{{ (bucket.count / (max_bucket or 1) * 100)|round }}%"></i><small>{{ bucket.label }}</small></div>{% endfor %}</div>
+  </section>
+  <section class="panel">
+    <div class="panel-title"><div><h2>当前模型高分选题</h2><p class="help">这是模型分，不等于事实可信度。</p></div></div>
+    <ol class="ranked-topic-list">{% for topic in status.top_topics %}<li><a href="/topics/{{ topic.id }}">{{ topic.title }}</a><strong>{{ '%.1f'|format(topic.model_score) }}</strong></li>{% else %}<li class="muted">训练后显示模型排序结果。</li>{% endfor %}</ol>
+  </section>
+</div>
+
+<section class="panel">
+  <div class="panel-title"><div><h2>特征重要性</h2><p class="help">数值越高，表示这个指标在最近一次模型分裂决策中使用得更多；它不代表因果关系。</p></div></div>
+  {% if status.artifact and status.artifact.metrics_json.top_features %}{% set features = status.artifact.metrics_json.top_features %}{% set max_importance = features|map(attribute='importance')|max %}<div class="importance-grid">{% for item in features %}<div><span>{{ item.label or item.name }}<small>{{ item.name }}</small></span><div class="data-bar-track"><i style="width:{{ (item.importance / (max_importance or 1) * 100)|round }}%"></i></div><strong>{{ item.importance }}%</strong></div>{% endfor %}</div>{% else %}<p class="muted">旧模型没有保存特征重要性。点击训练一次即可生成这组数据。</p>{% endif %}
+  <details class="feature-details"><summary>查看全部 {{ status.feature_names|length }} 个输入指标</summary><div class="feature-chips">{% for feature in status.feature_definitions %}<span title="{{ feature.name }}">{{ feature.label }}</span>{% endfor %}</div></details>
+</section>
+
+<section class="panel"><div class="panel-title"><div><h2>训练历史</h2><p class="help">方便比较样本增加后误差是否下降。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>算法 / 设备</th><th>样本</th><th>MAE</th><th>RMSE</th><th>R²</th><th>耗时</th></tr></thead><tbody>{% for item in status.training_history %}{% set m = item.metrics_json %}<tr><td>{{ item.trained_at.strftime('%m-%d %H:%M:%S') }}</td><td>{{ m.algorithm or '—' }} / {{ m.device or '—' }}</td><td>{{ item.sample_count }}</td><td>{{ m.validation_mae if m.validation_mae is not none else '—' }}</td><td>{{ m.validation_rmse if m.validation_rmse is not none else '—' }}</td><td>{{ m.validation_r2 if m.validation_r2 is defined and m.validation_r2 is not none else '—' }}</td><td>{{ m.training_seconds if m.training_seconds is defined else '—' }}</td></tr>{% else %}<tr><td colspan="7" class="muted">还没有训练记录。</td></tr>{% endfor %}</tbody></table></div></section>
+{% endblock %}

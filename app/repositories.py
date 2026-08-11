@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+import os
+from collections.abc import Iterable
+
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
+
+from .models import ModelArtifact, Setting, Source
+
+
+ENV_SETTING_MAP = {
+    "ai_chat_endpoint": "AI_CHAT_ENDPOINT",
+    "ai_chat_api_key": "AI_CHAT_API_KEY",
+    "ai_chat_model": "AI_CHAT_MODEL",
+    "ai_image_endpoint": "AI_IMAGE_ENDPOINT",
+    "ai_image_api_key": "AI_IMAGE_API_KEY",
+    "ai_image_model": "AI_IMAGE_MODEL",
+    "image_search_provider": "IMAGE_SEARCH_PROVIDER",
+    "preferred_keywords": "PREFERRED_KEYWORDS",
+    "blocked_keywords": "BLOCKED_KEYWORDS",
+}
+
+
+def get_setting(db: Session, key: str, default: str = "") -> str:
+    row = db.get(Setting, key)
+    if row is not None:
+        return row.value
+    env_name = ENV_SETTING_MAP.get(key)
+    if env_name:
+        return os.getenv(env_name, default)
+    return default
+
+
+def get_settings(db: Session, keys: Iterable[str]) -> dict[str, str]:
+    return {key: get_setting(db, key) for key in keys}
+
+
+def set_setting(db: Session, key: str, value: str) -> None:
+    row = db.get(Setting, key)
+    if row is None:
+        db.add(Setting(key=key, value=value))
+    else:
+        row.value = value
+
+
+def list_sources(db: Session) -> list[Source]:
+    return list(db.scalars(select(Source).order_by(Source.created_at.desc())))
+
+
+def get_source(db: Session, source_id: int) -> Source | None:
+    return db.get(Source, source_id)
+
+
+def save_source(db: Session, source: Source) -> Source:
+    db.add(source)
+    db.commit()
+    db.refresh(source)
+    return source
+
+
+def delete_source(db: Session, source_id: int) -> None:
+    source = db.get(Source, source_id)
+    if source is not None:
+        db.delete(source)
+        db.commit()
+
+
+def latest_model_artifact(db: Session, name: str) -> ModelArtifact | None:
+    return db.scalar(
+        select(ModelArtifact)
+        .where(ModelArtifact.name == name)
+        .order_by(ModelArtifact.trained_at.desc())
+        .limit(1)
+    )
+
+
+def delete_old_model_artifacts(db: Session, name: str, keep_path: str) -> None:
+    rows = db.scalars(select(ModelArtifact).where(ModelArtifact.name == name)).all()
+    for row in rows:
+        if row.path != keep_path:
+            db.delete(row)

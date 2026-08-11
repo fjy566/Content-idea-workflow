@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.title }} · 选题工作台{% endblock %}
+{% block content %}
+<a class="back-link" href="/">← 返回热点列表</a>
+
+<section class="detail-hero">
+  <div class="detail-kicker">
+    <span>{{ topic.display_category }}</span>
+    <span>{{ topic.last_seen_at.strftime('%Y-%m-%d %H:%M') if topic.last_seen_at else '时间未知' }}</span>
+  </div>
+  <h1>{{ topic.title }}</h1>
+  <div class="detail-stats">
+    <span><strong>{{ topic.recommendation_score|round(0)|int }}</strong> 推荐分</span>
+    <span><strong>{{ topic.source_count }}</strong> 个来源</span>
+    <span><strong>{{ topic.item_count }}</strong> 条信息</span>
+    <span><strong>{{ topic.conflict_score|round(0)|int }}</strong> 争议度</span>
+  </div>
+</section>
+
+{% if notice == 'api_missing' %}
+<div class="alert error">还没有配置文本 API。先完成一次设置，之后每个热点都可以直接生成选题建议。</div>
+{% endif %}
+
+<div class="detail-layout editorial-layout">
+  <div class="detail-main">
+    <section class="panel detail-section">
+      <div class="section-number">01</div>
+      <div class="section-heading">
+        <div><p class="eyebrow">先看发生了什么</p><h2>热点资料卡</h2></div>
+      </div>
+      <p class="lead-summary">{{ (topic.summary|striptags) or '当前来源没有提供摘要，请打开右侧原文核验。' }}</p>
+      <p class="fact-note">这里展示的是采集到的来源摘要，不代表平台对事实真实性作出判断。创作前请核验右侧原文。</p>
+    </section>
+
+    <section class="panel detail-section ai-section">
+      <div class="section-number">02</div>
+      <div class="section-heading">
+        <div><p class="eyebrow">再决定怎么写</p><h2>AI 选题推荐</h2></div>
+        {% if chat_configured %}
+        <form method="post" action="/topics/{{ topic.id }}/analyze" data-loading data-loading-title="正在生成 AI 选题推荐" data-loading-detail="正在读取来源并生成 5 个结构化角度，通常需要 10–60 秒，请勿重复点击。">
+          <button class="button primary" type="submit" data-loading-text="推荐生成中…">{% if topic.analyzed_at %}重新生成推荐{% else %}生成选题推荐{% endif %}</button>
+        </form>
+        {% endif %}
+      </div>
+
+      {% if topic.ai_error %}<div class="alert error">生成失败：{{ topic.ai_error }}</div>{% endif %}
+
+      {% if not chat_configured %}
+      <div class="setup-card">
+        <div><strong>先连接你的模型 API</strong><p>只需填写接口地址、密钥和模型名称。平台不会在浏览热点时消耗额度。</p></div>
+        <a class="button primary" href="/settings">去设置 API</a>
+      </div>
+      {% elif recommendations %}
+      <div class="analysis-summary">
+        <div><span>事实摘要</span><p>{{ topic.ai_summary or '未生成' }}</p></div>
+        <div><span>核心矛盾</span><p>{{ topic.ai_conflict or '未提取' }}</p></div>
+      </div>
+      <ol class="recommendation-list structured-recommendations">
+        {% for recommendation in recommendations %}
+        <li>
+          <span class="recommendation-index">{{ '%02d'|format(loop.index) }}</span>
+          <div class="recommendation-copy">
+            <h3>{{ recommendation.title }}</h3>
+            <dl><dt>切入点</dt><dd>{{ recommendation.approach }}</dd><dt>读者价值</dt><dd>{{ recommendation.reader_value }}</dd></dl>
+          </div>
+        </li>
+        {% endfor %}
+      </ol>
+      <div class="recommendation-footer">
+        <span>适合受众：{{ (topic.ai_audience or [])|join('、') or '未提取' }}</span>
+        <span>内容风险：{{ topic.ai_risk_level or '未分析' }}</span>
+        {% if chat_model %}<span>模型：{{ chat_model }}</span>{% endif %}
+      </div>
+      {% else %}
+      <div class="ai-empty">
+        <span class="ai-empty-mark">✦</span>
+        <div><strong>让模型帮你拆出 5 个可写角度</strong><p>会综合当前来源、核心矛盾和中国读者价值生成建议，点击按钮后才会调用 API。</p></div>
+      </div>
+      {% endif %}
+    </section>
+
+    <section class="panel detail-section article-builder" id="article-builder">
+      <div class="section-number">03</div>
+      <div class="section-heading"><div><p class="eyebrow">选好角度后</p><h2>生成文章初稿</h2><p class="help">先告诉模型具体写哪个选题，再选择文章形式。不会混用其他角度。</p></div></div>
+      {% if article_error %}<div class="alert error">{{ article_error }}</div>{% endif %}
+      {% if chat_configured %}
+      <form method="post" action="/topics/{{ topic.id }}/article" class="article-builder-form" data-loading data-loading-title="正在生成文章初稿" data-loading-detail="正在调用文本模型；如果选择了配图，还会继续搜索或生成并插入图片。可能需要 20–120 秒，请勿关闭页面。">
+        <fieldset class="angle-fieldset">
+          <legend>第一步：选择写作选题</legend>
+          {% for recommendation in recommendations %}
+          <label class="angle-choice">
+            <input type="radio" name="angle_choice" value="recommendation:{{ loop.index0 }}" {% if loop.first %}checked{% endif %}>
+            <span><strong>{{ '%02d'|format(loop.index) }} · {{ recommendation.title }}</strong><small>{{ recommendation.approach }}</small></span>
+          </label>
+          {% endfor %}
+          <label class="angle-choice custom-choice">
+            <input type="radio" name="angle_choice" value="custom" {% if not recommendations %}checked{% endif %}>
+            <span><strong>我自己定义选题</strong><small>适合你已经有明确方向时使用</small></span>
+          </label>
+          <label class="custom-topic-input">自定义选题说明<textarea name="custom_topic" rows="3" placeholder="例如：从子女与老人沟通的角度，写一篇家庭防骗行动指南"></textarea></label>
+        </fieldset>
+
+        <fieldset class="writing-options">
+          <legend>第二步：选择文章形式</legend>
+          <div class="form-grid">
+            <label>文章类型<select name="article_type">{% for item in article_types %}<option value="{{ item }}">{{ item }}</option>{% endfor %}</select></label>
+            <label>表达风格<select name="style">{% for item in article_styles %}<option value="{{ item }}">{{ item }}</option>{% endfor %}</select></label>
+            <label>目标篇幅（字）<input name="target_length" type="number" min="300" max="10000" step="100" value="1200" list="length-presets" required><datalist id="length-presets">{% for item in article_length_presets %}<option value="{{ item }}">{% endfor %}</datalist><small>可输入 300–10000 的任意整数</small></label>
+          </div>
+        </fieldset>
+        <fieldset class="image-options">
+          <legend>第三步：选择配图方式</legend>
+          <div class="image-mode-grid">
+            <label class="angle-choice"><input type="radio" name="image_mode" value="none" checked><span><strong>不使用配图</strong><small>最省事，不调用任何图片服务</small></span></label>
+            <label class="angle-choice"><input type="radio" name="image_mode" value="search"><span><strong>自动搜索配图</strong><small>使用 {{ image_search_provider_label|default('360 图片（中国搜索）', true) }}，失败会明确提示并可稍后重试，不消耗 AI Token</small></span></label>
+            <label class="angle-choice {% if not image_configured %}soft-disabled{% endif %}"><input type="radio" name="image_mode" value="ai" {% if not image_configured %}disabled{% endif %}><span><strong>AI 自动生成配图</strong><small>{% if image_configured %}调用已配置的图片 API，会产生费用{% else %}需要先在设置中配置图片 API{% endif %}</small></span></label>
+          </div>
+          <label>配图说明或搜图关键词（可选）<input name="image_instruction" maxlength="500" placeholder="例如：中国新能源汽车充电站，纪实摄影风格；留空则根据文章主题自动处理"></label>
+          <label>配图数量<select name="image_count"><option value="auto" selected>自动判断（按篇幅 1–4 张）</option>{% for count in range(1, 7) %}<option value="{{ count }}">{{ count }} 张{% if count > 1 %}（AI 模式调用 {{ count }} 次）{% endif %}</option>{% endfor %}</select><small>搜图不消耗 Token；AI 配图每张都会调用一次图片 API。</small></label>
+          <label>配图插入方式<select name="image_insert_mode"><option value="smart" selected>模型按章节智能插入（会额外调用一次文本模型）</option><option value="even">按篇幅均匀插入（不额外调用模型）</option><option value="library">只保存到素材库，稍后手动插入</option></select><small>模型只返回章节和原文短语，平台在本地完成真正插入；模型不可用时会自动回退到均匀排版。</small></label>
+        </fieldset>
+        <div class="generate-bar"><div><strong>生成后自动保存到文章库</strong><span>等待期间会显示进度提示；请勿重复点击，不会自动发布。</span></div><button class="button primary" type="submit" data-loading-text="初稿生成中…">按所选方向生成初稿</button></div>
+      </form>
+      {% else %}
+      <p class="muted">配置文本 API 后可生成文章初稿。</p>
+      {% endif %}
+    </section>
+  </div>
+
+  <aside>
+    <section class="panel source-panel">
+      <div class="panel-title"><h2>原始来源</h2><span class="source-count">{{ source_rows|length }}</span></div>
+      {% for item, source in source_rows %}
+      <article class="source-item">
+        <strong>{{ source.name }}</strong>
+        <a href="{{ item.normalized_url }}" target="_blank" rel="noreferrer">{{ item.title }}</a>
+        <p>{{ (item.summary|striptags)|truncate(140, true, '…') }}</p>
+      </article>
+      {% else %}<p class="muted">没有来源条目。</p>{% endfor %}
+    </section>
+    <section class="panel feedback-panel">
+      <h2>这个热点适合你吗？</h2>
+      <div class="button-row">
+        <form method="post" action="/topics/{{ topic.id }}/feedback"><input type="hidden" name="action" value="save"><button class="button" type="submit">收藏</button></form>
+        <form method="post" action="/topics/{{ topic.id }}/feedback"><input type="hidden" name="action" value="dismiss"><button class="button" type="submit">不感兴趣</button></form>
+      </div>
+    </section>
+    {% if topic_articles %}<section class="panel topic-articles"><div class="panel-title"><h2>这个热点的文章</h2><a href="/articles">全部文章</a></div>{% for article in topic_articles %}<a class="topic-article-link" href="/articles/{{ article.id }}"><strong>{{ article.title }}</strong><small>{% if article.status == 'draft' %}草稿{% elif article.status == 'ready' %}待发布{% else %}已发布{% endif %} · {{ article.updated_at.strftime('%m-%d %H:%M') }}</small></a>{% endfor %}</section>{% endif %}
+  </aside>
+</div>
+{% endblock %}

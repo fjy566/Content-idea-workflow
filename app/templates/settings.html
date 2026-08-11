@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}设置 · 选题工作台{% endblock %}
+{% block content %}
+<section class="page-header"><div><p class="eyebrow">模型连接向导</p><h1>连接你的 AI API</h1><p class="muted">按顺序填写接口和密钥、拉取模型、选择模型，最后保存。</p></div></section>
+{% if request.query_params.get('saved') %}<div class="alert success">设置已保存。</div>{% endif %}
+{% if model_message %}<div class="alert success">{{ model_message }}</div>{% endif %}
+{% if model_error %}<div class="alert error">{{ model_error }}</div>{% endif %}
+
+<form method="post" action="/settings" class="settings-form api-wizard">
+  <section class="panel api-panel">
+    <div class="api-panel-head"><div><span class="step-badge">主要</span><h2>文本模型</h2><p class="help">用于生成选题推荐和文章。兼容 OpenAI、DeepSeek 等 Chat Completions 接口。</p></div></div>
+    <div class="form-grid">
+      <label class="wide">1. API 地址<input name="ai_chat_endpoint" value="{{ values['ai_chat_endpoint'] }}" placeholder="例如：https://api.deepseek.com"></label>
+      <p class="help wide">可以填写供应商给出的基础地址，也可以填写完整的 <code>/chat/completions</code> 地址，平台会自动识别。</p>
+      <label class="wide">2. API Key<input name="ai_chat_api_key" type="password" value="{{ masked['ai_chat_api_key'] }}" placeholder="密钥只保存在本机"></label>
+      <div class="wide model-fetch-row">
+        <button class="button" type="submit" formaction="/settings/models/chat" formmethod="post">3. 拉取可用模型</button>
+        <span>平台会自动请求对应的 <code>/models</code> 接口。</span>
+      </div>
+      <label class="wide">4. 选择文本模型
+        {% if chat_models %}
+        <select name="ai_chat_model">
+          {% if values['ai_chat_model'] and values['ai_chat_model'] not in chat_models %}<option value="{{ values['ai_chat_model'] }}" selected>{{ values['ai_chat_model'] }}（当前）</option>{% endif %}
+          {% for model in chat_models %}<option value="{{ model }}" {% if model == values['ai_chat_model'] %}selected{% endif %}>{{ model }}</option>{% endfor %}
+        </select>
+        {% else %}
+        <input name="ai_chat_model" value="{{ values['ai_chat_model'] }}" placeholder="先拉取模型；不支持模型列表时可手动填写">
+        {% endif %}
+      </label>
+    </div>
+  </section>
+
+  <section class="panel api-panel secondary-api">
+    <div class="api-panel-head"><div><span class="step-badge optional">可选</span><h2>图片模型</h2><p class="help">用于文章配图。接口需返回 data[0].b64_json 或 data[0].url。</p></div></div>
+    <div class="form-grid">
+      <label class="wide">Image Endpoint<input name="ai_image_endpoint" value="{{ values['ai_image_endpoint'] }}" placeholder="例如：https://api.example.com/v1/images/generations"></label>
+      <label class="wide">API Key<input name="ai_image_api_key" type="password" value="{{ masked['ai_image_api_key'] }}" placeholder="留空则保持已保存密钥不变"></label>
+      <div class="wide model-fetch-row"><button class="button" type="submit" formaction="/settings/models/image" formmethod="post">拉取图片模型</button></div>
+      <label class="wide">图片模型
+        {% if image_models %}
+        <select name="ai_image_model">
+          {% if values['ai_image_model'] and values['ai_image_model'] not in image_models %}<option value="{{ values['ai_image_model'] }}" selected>{{ values['ai_image_model'] }}（当前）</option>{% endif %}
+          {% for model in image_models %}<option value="{{ model }}" {% if model == values['ai_image_model'] %}selected{% endif %}>{{ model }}</option>{% endfor %}
+        </select>
+        {% else %}<input name="ai_image_model" value="{{ values['ai_image_model'] }}" placeholder="先拉取模型，或手动填写模型名称">{% endif %}
+      </label>
+    </div>
+  </section>
+
+  <section class="panel api-panel image-search-settings">
+    <div class="api-panel-head"><div><span class="step-badge">推荐</span><h2>关键词搜图来源</h2><p class="help">文章配图的“搜索”模式只会发送标题和小标题等关键词，不会发送全文。当前只使用中国图片搜索源，搜索失败会明确提示，不会切换外国来源。</p></div></div>
+    <div class="form-grid">
+      <label class="wide">默认搜索源
+        <select name="image_search_provider">
+          <option value="360" {% if values.get('image_search_provider', '360') == '360' %}selected{% endif %}>360 图片（中国搜索）</option>
+        </select>
+      </label>
+      <p class="help wide">360 结果适合中国读者的关键词检索，但不等于图片授权。素材卡片会保留来源地址；发布前请逐张核对原始页面和许可。也可以选择“AI 自动生成配图”，完全使用你配置的图片 API。</p>
+    </div>
+  </section>
+
+  <section class="panel"><h2>推荐偏好</h2>
+    <label>偏好关键词<textarea name="preferred_keywords" rows="3" placeholder="例如：AI，芯片，互联网，普通人视角">{{ values['preferred_keywords'] }}</textarea></label>
+    <label>排除关键词<textarea name="blocked_keywords" rows="3" placeholder="例如：博彩，未经证实">{{ values['blocked_keywords'] }}</textarea></label>
+  </section>
+  <button class="button primary save-settings" type="submit">保存全部设置</button>
+</form>
+{% endblock %}
