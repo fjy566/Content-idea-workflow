@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from urllib.parse import quote_plus
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from ..config import settings
 from ..db import get_db
 from ..models import Article, Topic, utcnow
+from ..repositories import delete_article as delete_article_record
 from ..web import templates
 
 
@@ -53,6 +57,25 @@ def article_library(
             "total_count": sum(counts.values()),
         },
     )
+
+
+@router.post("/{article_id}/delete")
+def delete_article_from_library(
+    article_id: int,
+    status: str = Form(""),
+    q: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    """Delete one saved article without deleting its source topic."""
+    if not delete_article_record(db, article_id, settings.data_dir):
+        raise HTTPException(status_code=404, detail="Article not found")
+
+    query = [f"notice={quote_plus('文章已删除；本地配图文件已清理，来源热点已保留')}"]
+    if status in STATUS_LABELS:
+        query.append(f"status={quote_plus(status)}")
+    if q.strip():
+        query.append(f"q={quote_plus(q.strip())}")
+    return RedirectResponse(f"/articles?{'&'.join(query)}", status_code=303)
 
 
 @router.post("/{article_id}/autosave", response_class=JSONResponse)

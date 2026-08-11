@@ -1,9 +1,13 @@
+from dataclasses import replace
+from pathlib import Path
+
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models import Article, Base, Topic
-from app.routes.articles import article_library, autosave_article
+from app.config import settings
+from app.models import Article, Base, GeneratedImage, Topic
+from app.routes.articles import article_library, autosave_article, delete_article_from_library
 from app.routes.topics import save_article
 
 
@@ -84,3 +88,37 @@ def test_autosave_persists_without_redirecting_from_editor():
         assert article.title == "自动保存题目"
         assert article.content == "自动保存正文"
         assert article.status == "ready"
+
+
+def test_delete_article_removes_article_and_local_images_but_keeps_topic(monkeypatch, tmp_path: Path):
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    image_path = tmp_path / "images" / "article.jpg"
+    image_path.parent.mkdir()
+    image_path.write_bytes(b"article-image")
+
+    with Session(engine) as db:
+        topic = Topic(title="保留的来源热点", summary="热点仍然存在")
+        article = Article(topic=topic, title="待删除文章", content="正文", status="draft")
+        article.images.append(GeneratedImage(file_path="images/article.jpg", prompt="配图"))
+        db.add(article)
+        db.commit()
+        article_id = article.id
+
+        monkeypatch.setattr("app.routes.articles.settings", replace(settings, data_dir=tmp_path))
+        response = delete_article_from_library(article_id, "draft", "来源", db)
+
+        assert response.status_code == 303
+        assert "notice=" in response.headers["location"]
+        assert db.get(Article, article_id) is None
+        assert db.scalar(select(Topic).where(Topic.id == topic.id)) is not None
+        assert db.scalar(select(GeneratedImage).where(GeneratedImage.article_id == article_id)) is None
+        assert not image_path.exists()
+
+
+def test_article_library_exposes_explicit_post_delete_action():
+    source = Path("app/templates/articles.html").read_text(encoding="utf-8")
+    assert 'method="post" action="/articles/{{ article.id }}/delete"' in source
+    assert "删除文章" in source
+    assert "来源热点会保留" in source
+    assert "此操作不可恢复" in source

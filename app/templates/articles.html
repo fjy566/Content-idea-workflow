@@ -2,9 +2,11 @@
 {% block title %}文章库 · 选题工作台{% endblock %}
 {% block content %}
 <section class="page-header">
-  <div><p class="eyebrow">ARTICLE LIBRARY</p><h1>文章库</h1><p class="muted">生成和保存过的文章都在这里。状态是你的工作流，不会自动发布到外部平台。</p></div>
+  <div><p class="eyebrow">ARTICLE LIBRARY</p><h1>文章库</h1><p class="muted">生成和保存过的文章都在这里。状态是你的工作流，不会自动发布到外部平台；删除只移除文章和本地配图，不会删除来源热点。</p></div>
   <a class="button" href="/">寻找新选题</a>
 </section>
+
+{% if request.query_params.get('notice') %}<div class="alert success">{{ request.query_params.get('notice') }}</div>{% endif %}
 
 <form class="searchbar" method="get" action="/articles">
   <input name="q" value="{{ q }}" placeholder="搜索文章标题、正文或来源热点">
@@ -27,7 +29,14 @@
       <p>{{ (article.content|striptags)|truncate(180, true, '…') }}</p>
       <div class="article-card-meta"><span>来源：{{ article.topic.title|truncate(55, true, '…') }}</span><span>{{ article.content|length }} 字符</span><span>{{ article.images|length }} 张图片</span><span>{{ article.model or '未记录模型' }}</span></div>
     </a>
-    <a class="button" href="/articles/{{ article.id }}">继续编辑</a>
+    <div class="article-card-actions">
+      <a class="button" href="/articles/{{ article.id }}">继续编辑</a>
+      <form method="post" action="/articles/{{ article.id }}/delete" onsubmit="return confirm('确定删除这篇文章吗？文章和本地配图将被删除，来源热点会保留。此操作不可恢复。')">
+        <input type="hidden" name="status" value="{{ active_status }}">
+        <input type="hidden" name="q" value="{{ q }}">
+        <button class="button danger" type="submit">删除文章</button>
+      </form>
+    </div>
   </article>
   {% endfor %}
 </section>

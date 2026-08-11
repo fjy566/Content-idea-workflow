@@ -65,6 +65,9 @@ body[aria-busy="true"] { overflow:hidden; }
 .status-tab strong { font-size:19px; }
 .article-library-list { display:grid; gap:12px; }
 .article-library-card { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:18px; padding:19px 20px; background:#fff; border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow); }
+.article-card-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:8px; }
+.button.danger { color:var(--danger); border-color:#e5b3ac; background:#fff8f7; }
+.button.danger:hover { border-color:var(--danger); background:#fff1f0; }
 .article-card-main { min-width:0; color:var(--ink); }
 .article-card-main:hover { text-decoration:none; }
 .article-card-main h2 { margin:7px 0 5px; font-family:"STSong","SimSun",serif; font-size:22px; line-height:1.4; }

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterable
+from pathlib import Path
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from .models import ModelArtifact, Setting, Source
+from .models import Article, ModelArtifact, Setting, Source
+
+
+logger = logging.getLogger(__name__)
 
 
 ENV_SETTING_MAP = {
@@ -64,6 +69,41 @@ def delete_source(db: Session, source_id: int) -> None:
     if source is not None:
         db.delete(source)
         db.commit()
+
+
+def _safe_article_image_path(file_path: str, data_dir: Path) -> Path | None:
+    """Resolve a stored media path without allowing deletion outside data_dir."""
+    root = data_dir.resolve()
+    candidate = (root / str(file_path)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        logger.warning("Skip article image cleanup outside data directory: %s", file_path)
+        return None
+    return candidate
+
+
+def delete_article(db: Session, article_id: int, data_dir: Path) -> bool:
+    """Delete an article and its local image files, keeping the source topic."""
+    article = db.get(Article, article_id)
+    if article is None:
+        return False
+
+    image_paths = [
+        path
+        for image in article.images
+        if (path := _safe_article_image_path(image.file_path, data_dir)) is not None
+    ]
+    db.delete(article)
+    db.commit()
+
+    for path in image_paths:
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError as exc:
+            logger.warning("Article deleted but image cleanup failed for %s: %s", path, exc)
+    return True
 
 
 def latest_model_artifact(db: Session, name: str) -> ModelArtifact | None:
