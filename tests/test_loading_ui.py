@@ -5,6 +5,7 @@ def test_base_layout_contains_accessible_operation_overlay():
     assert 'id="operation-overlay"' in source
     assert 'role="status"' in source
     assert "/static/form-loading.js?v=2" in source
+    assert "/static/enhancements.css?v=2" in source
 
 
 def test_loading_script_preserves_named_submit_button_before_disabling():
@@ -37,6 +38,7 @@ def test_editor_exposes_human_friendly_formatting_and_draft_recovery():
     assert 'data-view-mode="preview"' in source
     assert 'id="local-draft-banner"' in source
     assert 'data-autosave-url="/articles/{{ article.id }}/autosave"' in source
+    assert 'src="/static/article-editor.js?v=2"' in source
     assert 'data-editor-command="table"' in source
     assert 'data-editor-command="undo"' in source
     assert 'data-copy-image=' in source
