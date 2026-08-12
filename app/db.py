@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .config import settings
 from .categories import categorize_topic
-from .models import Base, Topic
+from .models import Base, CrawlLog, CrawlRun, Topic, utcnow
 from .source_catalog import ensure_default_source_catalog
 
 
@@ -35,6 +35,11 @@ def init_db() -> None:
     _ensure_compatible_columns()
     db = SessionLocal()
     try:
+        recovered = _recover_incomplete_crawls(db)
+        if recovered:
+            import logging
+
+            logging.getLogger(__name__).warning("Recovered %s incomplete crawl run(s) as paused", recovered)
         added = ensure_default_source_catalog(db)
         if added:
             import logging
@@ -42,6 +47,25 @@ def init_db() -> None:
             logging.getLogger(__name__).info("Default Chinese source catalog ready: added=%s", added)
     finally:
         db.close()
+
+
+def _recover_incomplete_crawls(db: Session) -> int:
+    """Turn runs left by a crashed process into resumable paused runs."""
+    runs = list(db.scalars(select(CrawlRun).where(CrawlRun.status.in_(["pending", "running"]))))
+    for run in runs:
+        run.status = "paused"
+        run.pause_requested = False
+        run.finished_at = utcnow()
+        db.add(
+            CrawlLog(
+                run_id=run.id,
+                level="error",
+                message="应用上次退出时采集未完成，已自动暂停并保留进度；点击“继续采集”可从未完成的数据源恢复。",
+            )
+        )
+    if runs:
+        db.commit()
+    return len(runs)
 
 
 def _ensure_compatible_columns() -> None:
@@ -54,6 +78,15 @@ def _ensure_compatible_columns() -> None:
         },
         "topics": {
             "category": "VARCHAR(50) NOT NULL DEFAULT '其他'",
+        },
+        "sources": {
+            "timeout_seconds": "INTEGER NOT NULL DEFAULT 30",
+        },
+        "crawl_runs": {
+            "selected_source_ids": "JSON",
+            "completed_source_ids": "JSON",
+            "timeout_seconds": "INTEGER NOT NULL DEFAULT 300",
+            "pause_requested": "BOOLEAN NOT NULL DEFAULT 0",
         },
     }
     with engine.begin() as connection:

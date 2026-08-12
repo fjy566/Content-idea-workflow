@@ -3,6 +3,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import socket
+import time
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
@@ -56,6 +57,7 @@ def safe_request(
     url: str,
     *,
     max_redirects: int = MAX_PUBLIC_REDIRECTS,
+    deadline: float | None = None,
     **kwargs: Any,
 ) -> httpx.Response:
     """Make an HTTP request while validating every redirect target.
@@ -68,7 +70,22 @@ def safe_request(
     request_kwargs = dict(kwargs)
     redirects = 0
     while True:
-        response = client.request(method, current_url, follow_redirects=False, **request_kwargs)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("外部请求超过数据源超时时间")
+        if deadline is None:
+            response = client.request(method, current_url, follow_redirects=False, **request_kwargs)
+        else:
+            with client.stream(method, current_url, follow_redirects=False, **request_kwargs) as streamed:
+                if streamed.status_code in REDIRECT_STATUS_CODES:
+                    response = streamed
+                else:
+                    chunks: list[bytes] = []
+                    for chunk in streamed.iter_bytes():
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("外部请求超过数据源超时时间")
+                        chunks.append(chunk)
+                    streamed._content = b"".join(chunks)
+                    response = streamed
         request_kwargs.pop("params", None)
         if response.status_code not in REDIRECT_STATUS_CODES:
             validate_public_url(str(response.url))

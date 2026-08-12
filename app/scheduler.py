@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -9,8 +10,8 @@ from sqlalchemy import select
 
 from .ai_provider import AIProvider, AIProviderError
 from .config import settings
-from .db import init_db, session_scope
 from .crawler import crawl_source
+from .db import init_db, session_scope
 from .models import AITask, CrawlLog, CrawlRun, Source, Topic, utcnow
 from .repositories import get_setting
 from .topic_pipeline import calculate_baseline_score, ingest_items, mark_source_error, topic_sources
@@ -82,6 +83,43 @@ def _sources_for_cycle(db, source_ids: list[int] | None = None) -> list[Source]:
     return list(db.scalars(statement.order_by(Source.name.asc())))
 
 
+def _round_timeout(value: object | None) -> int:
+    try:
+        seconds = int(value or settings.crawl_round_timeout_seconds)
+    except (TypeError, ValueError):
+        seconds = settings.crawl_round_timeout_seconds
+    return max(30, min(3600, seconds))
+
+
+def _source_ids_from_run(run: CrawlRun, source_ids: list[int] | None) -> list[int] | None:
+    values = source_ids
+    if values is None and isinstance(run.selected_source_ids, list):
+        values = run.selected_source_ids
+    if values is None:
+        return None
+    result: list[int] = []
+    for value in values:
+        try:
+            source_id = int(value)
+        except (TypeError, ValueError):
+            continue
+        if source_id not in result:
+            result.append(source_id)
+    return result
+
+
+def _completed_source_ids(run: CrawlRun) -> set[int]:
+    if not isinstance(run.completed_source_ids, list):
+        return set()
+    result: set[int] = set()
+    for value in run.completed_source_ids:
+        try:
+            result.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
 def _crawl_log(db, run_id: int, message: str, source_name: str | None = None, level: str = "info") -> None:
     db.add(CrawlLog(run_id=run_id, source_name=source_name, level=level, message=clean_text(message, 2000)))
     db.commit()
@@ -93,38 +131,75 @@ def run_crawl_cycle(
     run_id: int | None = None,
     trigger: str = "scheduled",
 ) -> dict[str, int]:
-    """Run exactly one pass over the selected sources; never invokes a paid AI API."""
+    """Run one bounded pass over selected sources; never invokes a paid AI API."""
     init_db()
     result = {"sources": 0, "items": 0, "errors": 0}
     with session_scope() as db:
-        sources = _sources_for_cycle(db, source_ids)
         run = db.get(CrawlRun, run_id) if run_id else None
+        effective_source_ids = _source_ids_from_run(run, source_ids) if run is not None else source_ids
+        sources = _sources_for_cycle(db, effective_source_ids)
         if run is None:
-            active = db.scalar(select(CrawlRun).where(CrawlRun.status.in_(("pending", "running"))).limit(1))
+            active = db.scalar(select(CrawlRun).where(CrawlRun.status.in_(["pending", "running", "paused"])).limit(1))
             if active is not None:
                 logger.info("Skipping crawl: run %s is already active", active.id)
                 return result
-            run = CrawlRun(trigger=trigger, status="pending", total_sources=len(sources))
+            run = CrawlRun(
+                trigger=trigger,
+                status="pending",
+                total_sources=len(sources),
+                selected_source_ids=effective_source_ids,
+                completed_source_ids=[],
+                timeout_seconds=settings.crawl_round_timeout_seconds,
+            )
             db.add(run)
             db.commit()
             db.refresh(run)
+        elif run.status not in {"pending", "running", "paused"}:
+            logger.info("Skipping crawl: run %s is already %s", run.id, run.status)
+            return result
+        elif run.selected_source_ids is None and effective_source_ids is not None:
+            run.selected_source_ids = effective_source_ids
+
+        completed_ids = _completed_source_ids(run)
+        if run.total_sources <= 0:
+            run.total_sources = len(sources)
         run.status = "running"
         run.started_at = utcnow()
-        run.total_sources = len(sources)
+        run.finished_at = None
         db.commit()
         _crawl_log(db, run.id, f"开始单轮采集，共 {len(sources)} 个数据源；本轮不会自动调用 AI。")
+
+        deadline = time.monotonic() + _round_timeout(run.timeout_seconds)
         for source in sources:
+            if source.id in completed_ids:
+                continue
+            if run.pause_requested:
+                run.status = "paused"
+                run.finished_at = utcnow()
+                db.commit()
+                _crawl_log(db, run.id, "已按请求暂停：当前源已完成，保留已完成进度。")
+                return result
+            if time.monotonic() >= deadline:
+                run.status = "timeout"
+                run.finished_at = utcnow()
+                db.commit()
+                _crawl_log(db, run.id, f"本轮采集超时：达到设定的 {_round_timeout(run.timeout_seconds)} 秒总时限。", level="error")
+                return result
+
             result["sources"] += 1
             if not force and source.last_crawled_at is not None:
                 elapsed = utcnow() - as_utc(source.last_crawled_at)
                 if elapsed.total_seconds() < max(5, source.interval_minutes) * 60:
-                    run.processed_sources += 1
+                    completed_ids.add(source.id)
+                    run.completed_source_ids = sorted(completed_ids)
+                    run.processed_sources = len(completed_ids)
                     db.commit()
                     _crawl_log(db, run.id, "尚未到该数据源的采集间隔，本轮跳过。", source.name)
                     continue
             try:
                 _crawl_log(db, run.id, "开始采集。", source.name)
-                items = crawl_source(source)
+                remaining = max(1, int(deadline - time.monotonic()))
+                items = crawl_source(source, remaining)
                 inserted, _attached = ingest_items(db, source, items)
                 result["items"] += inserted
                 run.new_items += inserted
@@ -136,12 +211,23 @@ def run_crawl_cycle(
                 logger.exception("Crawl failed for %s", source.name)
                 mark_source_error(db, source, exc)
                 _crawl_log(db, run.id, f"失败：{exc}", source.name, "error")
-            run.processed_sources += 1
+
+            completed_ids.add(source.id)
+            run.completed_source_ids = sorted(completed_ids)
+            run.processed_sources = len(completed_ids)
             db.commit()
-        run.status = "partial" if run.error_count else "success"
-        run.finished_at = utcnow()
-        db.commit()
-        _crawl_log(db, run.id, f"本轮结束：新增 {run.new_items} 条，失败 {run.error_count} 个数据源。")
+
+        remaining_sources = any(source.id not in completed_ids for source in sources)
+        if run.pause_requested and remaining_sources:
+            run.status = "paused"
+            run.finished_at = utcnow()
+            db.commit()
+            _crawl_log(db, run.id, "已按请求暂停：已完成当前源，等待继续采集。")
+        else:
+            run.status = "partial" if run.error_count else "success"
+            run.finished_at = utcnow()
+            db.commit()
+            _crawl_log(db, run.id, f"本轮结束：新增 {run.new_items} 条，失败 {run.error_count} 个数据源。")
     return result
 
 

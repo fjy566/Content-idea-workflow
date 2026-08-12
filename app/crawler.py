@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -55,15 +56,31 @@ def _parse_datetime(value: object | None) -> datetime | None:
     return result.astimezone(timezone.utc)
 
 
-def _download(url: str) -> tuple[bytes, str]:
+def _source_timeout(source: Source, override: int | None = None) -> int:
+    try:
+        configured = int(source.timeout_seconds or settings.source_timeout_seconds)
+    except (TypeError, ValueError):
+        configured = settings.source_timeout_seconds
+    configured = max(5, min(300, configured))
+    if override is not None:
+        try:
+            value = min(configured, int(override))
+        except (TypeError, ValueError):
+            value = configured
+        return max(1, min(300, value))
+    return configured
+
+
+def _download(url: str, timeout_seconds: int | None = None) -> tuple[bytes, str]:
     validate_public_url(url)
     headers = {"User-Agent": settings.user_agent, "Accept": "text/html,application/rss+xml,application/atom+xml,application/xml;q=0.9,*/*;q=0.8"}
     with httpx.Client(
         headers=headers,
         follow_redirects=False,
-        timeout=settings.request_timeout_seconds,
+        timeout=timeout_seconds or settings.source_timeout_seconds,
     ) as client:
-        response = safe_request(client, "GET", url)
+        deadline = time.monotonic() + (timeout_seconds or settings.source_timeout_seconds)
+        response = safe_request(client, "GET", url, deadline=deadline)
         response.raise_for_status()
         content_length = response.headers.get("content-length")
         if content_length and int(content_length) > settings.max_response_bytes:
@@ -167,7 +184,7 @@ def _parse_html(body: bytes, source: Source) -> list[CrawledItem]:
     return list(unique.values())
 
 
-def _download_dynamic(source: Source) -> bytes:
+def _download_dynamic(source: Source, timeout_seconds: int | None = None) -> bytes:
     validate_public_url(source.url)
     try:
         from playwright.sync_api import sync_playwright
@@ -188,8 +205,9 @@ def _download_dynamic(source: Source) -> bytes:
                 route.continue_()
 
             page.route("**/*", guard_request)
-            page.goto(source.url, wait_until="domcontentloaded", timeout=int(settings.request_timeout_seconds * 1000))
-            page.wait_for_timeout(1000)
+            timeout_ms = int((timeout_seconds or settings.source_timeout_seconds) * 1000)
+            page.goto(source.url, wait_until="domcontentloaded", timeout=timeout_ms)
+            page.wait_for_timeout(min(1000, max(100, timeout_ms // 5)))
             validate_public_url(page.url)
             body = page.content().encode("utf-8")
         finally:
@@ -199,11 +217,12 @@ def _download_dynamic(source: Source) -> bytes:
     return body
 
 
-def crawl_source(source: Source) -> list[CrawledItem]:
+def crawl_source(source: Source, timeout_seconds: int | None = None) -> list[CrawledItem]:
+    timeout_seconds = _source_timeout(source, timeout_seconds)
     if source.kind == "rss":
-        body, _content_type = _download(source.url)
+        body, _content_type = _download(source.url, timeout_seconds)
         return _parse_rss(body, source.url)
     if source.kind == "html_js":
-        return _parse_html(_download_dynamic(source), source)
-    body, _content_type = _download(source.url)
+        return _parse_html(_download_dynamic(source, timeout_seconds), source)
+    body, _content_type = _download(source.url, timeout_seconds)
     return _parse_html(body, source)

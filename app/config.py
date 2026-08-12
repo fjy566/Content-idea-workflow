@@ -37,6 +37,8 @@ class Settings:
     port: int
     data_dir: Path
     crawl_interval_minutes: int
+    source_timeout_seconds: int
+    crawl_round_timeout_seconds: int
     request_timeout_seconds: float
     max_response_bytes: int
     user_agent: str
@@ -65,6 +67,8 @@ def load_settings() -> Settings:
         port=_int_env("PORT", 8000),
         data_dir=data_dir,
         crawl_interval_minutes=max(5, _int_env("CRAWL_INTERVAL_MINUTES", 30)),
+        source_timeout_seconds=max(5, min(300, _int_env("SOURCE_TIMEOUT_SECONDS", 30))),
+        crawl_round_timeout_seconds=max(30, min(3600, _int_env("CRAWL_ROUND_TIMEOUT_SECONDS", 300))),
         request_timeout_seconds=max(5.0, _float_env("REQUEST_TIMEOUT_SECONDS", 25.0)),
         max_response_bytes=max(100_000, _int_env("MAX_RESPONSE_BYTES", 5_000_000)),
         user_agent=os.getenv(
@@ -75,4 +79,3 @@ def load_settings() -> Settings:
 
 
 settings = load_settings()
-

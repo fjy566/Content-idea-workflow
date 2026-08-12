@@ -24,6 +24,7 @@
     <label>类型<select name="kind"><option value="rss">RSS / Atom</option><option value="html">静态 HTML</option><option value="html_js">动态 HTML（需 Playwright）</option></select></label>
     <label class="wide">地址<input name="url" type="url" required placeholder="https://example.com/feed.xml"></label>
     <label>采集间隔（分钟）<input name="interval_minutes" type="number" min="5" max="1440" value="30"></label>
+    <label>单源超时（秒）<input name="timeout_seconds" type="number" min="5" max="300" value="30"><small class="help">超过这个时间仍未完成，就记录为失败并继续下一个源。</small></label>
     <label>条目选择器<input name="item_selector" placeholder="article, .item"></label>
     <label>标题选择器<input name="title_selector" placeholder="h2, .title"></label>
     <label>链接选择器<input name="link_selector" placeholder="a[href]"></label>
@@ -37,13 +38,19 @@
   <h2>已配置数据源</h2>
   {% if sources %}
   <div class="table-wrap"><table>
-    <thead><tr><th>名称</th><th>类型</th><th>地址</th><th>状态</th><th>最近结果</th><th></th></tr></thead>
+    <thead><tr><th>名称</th><th>类型</th><th>地址</th><th>状态</th><th>单源超时</th><th>最近结果</th><th></th></tr></thead>
     <tbody>
       {% for source in sources %}
       <tr>
         <td>{{ source.name }}</td><td>{{ source.kind }}</td>
         <td class="url-cell"><a href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.url }}</a></td>
         <td>{% if source.enabled %}<span class="status ok">启用</span>{% else %}<span class="status">停用</span>{% endif %}</td>
+        <td>
+          <form method="post" action="/sources/{{ source.id }}/timeout" class="inline-timeout-form">
+            <input name="timeout_seconds" type="number" min="5" max="300" value="{{ source.timeout_seconds }}" aria-label="{{ source.name }} 单源超时秒数">
+            <button class="link-button" type="submit">保存</button>
+          </form>
+        </td>
         <td>{% if source.last_error %}<span class="status error">失败：{{ source.last_error[:80] }}</span>{% elif source.last_success_at %}{{ source.last_success_at.strftime('%m-%d %H:%M') }}{% else %}未采集{% endif %}</td>
         <td class="actions">
           <form method="post" action="/sources/{{ source.id }}/toggle"><button class="link-button" type="submit">{% if source.enabled %}停用{% else %}启用{% endif %}</button></form>

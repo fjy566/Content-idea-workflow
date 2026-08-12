@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from urllib.parse import quote_plus
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import get_db
 from ..models import Source
 from ..repositories import delete_source, list_sources, save_source
@@ -14,6 +15,14 @@ from ..web import templates
 
 
 router = APIRouter(prefix="/sources", tags=["sources"])
+
+
+def _bounded_source_timeout(value: object) -> int:
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        seconds = settings.source_timeout_seconds
+    return max(5, min(300, seconds))
 
 
 @router.get("", response_class=HTMLResponse)
@@ -37,6 +46,7 @@ def add_source(
     kind: str = Form(...),
     url: str = Form(...),
     interval_minutes: int = Form(30),
+    timeout_seconds: int = Form(settings.source_timeout_seconds),
     item_selector: str = Form(""),
     title_selector: str = Form(""),
     link_selector: str = Form(""),
@@ -58,6 +68,7 @@ def add_source(
         kind=kind,
         url=normalized_url,
         interval_minutes=max(5, min(1440, interval_minutes)),
+        timeout_seconds=_bounded_source_timeout(timeout_seconds),
         item_selector=item_selector.strip()[:500] or None,
         title_selector=title_selector.strip()[:500] or None,
         link_selector=link_selector.strip()[:500] or None,
@@ -75,6 +86,20 @@ def toggle_source(source_id: int, db: Session = Depends(get_db)):
         source.enabled = not source.enabled
         db.commit()
     return RedirectResponse("/sources", status_code=303)
+
+
+@router.post("/{source_id}/timeout")
+def update_source_timeout(
+    source_id: int,
+    timeout_seconds: int = Form(...),
+    db: Session = Depends(get_db),
+):
+    source = db.get(Source, source_id)
+    if source is None:
+        return RedirectResponse("/sources?error=数据源不存在", status_code=303)
+    source.timeout_seconds = _bounded_source_timeout(timeout_seconds)
+    db.commit()
+    return RedirectResponse("/sources?notice=已保存该数据源的超时时间", status_code=303)
 
 
 @router.post("/{source_id}/delete")

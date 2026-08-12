@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 import app.routes.sources as source_routes
 from app.models import Base, Setting, Source
 from app.source_catalog import (
+    CHINA_SOURCE_PRESETS,
     DEFAULT_SOURCE_CATALOG_KEY,
     LEGACY_CHINA_SOURCE_MIGRATION_KEY,
     ensure_default_source_catalog,
@@ -17,6 +18,18 @@ def test_source_allowlist_accepts_chinese_domains_and_rejects_foreign_domains():
     assert is_china_source_url("https://www.geekpark.net/rss")
     assert not is_china_source_url("https://feeds.bbci.co.uk/news/world/rss.xml")
     assert not is_china_source_url("https://techcrunch.com/feed/")
+
+
+def test_catalog_contains_verified_chinese_it_feeds():
+    urls = {preset.url for preset in CHINA_SOURCE_PRESETS}
+
+    assert "https://www.infoq.cn/feed" in urls
+    assert "https://www.oschina.net/news/rss" in urls
+    assert "https://www.v2ex.com/index.xml" in urls
+    assert "https://segmentfault.com/feeds" in urls
+    assert "https://www.leiphone.com/feed" in urls
+    assert "https://www.woshipm.com/feed" in urls
+    assert all(is_china_source_url(url) for url in urls)
 
 
 def test_fresh_install_seeds_real_chinese_defaults():

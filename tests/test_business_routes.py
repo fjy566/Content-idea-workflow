@@ -183,12 +183,18 @@ def test_source_selection_toggle_delete_and_log_clear_workflow(
 ):
     added = client.post(
         "/sources/add",
-        data={"name": "Custom source", "kind": "rss", "url": "https://example.com/custom.xml"},
+        data={
+            "name": "Custom source",
+            "kind": "rss",
+            "url": "https://example.com/custom.xml",
+            "timeout_seconds": "17",
+        },
         follow_redirects=False,
     )
     assert added.status_code == 303
     source = db.scalar(select(Source).where(Source.name == "Custom source"))
     assert source is not None
+    assert source.timeout_seconds == 17
     disabled = Source(name="Disabled source", kind="rss", url="https://example.com/disabled.xml", enabled=False)
     db.add(disabled)
     db.commit()
@@ -197,7 +203,7 @@ def test_source_selection_toggle_delete_and_log_clear_workflow(
     monkeypatch.setattr(admin_routes, "run_crawl_cycle", lambda *args, **kwargs: called.append((args, kwargs)))
     started = client.post(
         "/admin/crawl",
-        data={"source_ids": [str(source.id), str(disabled.id)]},
+        data={"source_ids": [str(source.id), str(disabled.id)], "round_timeout_seconds": "45"},
         follow_redirects=False,
     )
     assert started.status_code == 303
@@ -205,6 +211,31 @@ def test_source_selection_toggle_delete_and_log_clear_workflow(
     run = db.scalar(select(CrawlRun).order_by(CrawlRun.id.desc()))
     assert run is not None
     assert run.total_sources == 1
+    assert run.timeout_seconds == 45
+
+    pause_requested = client.post(f"/admin/crawl/{run.id}/pause", follow_redirects=False)
+    assert pause_requested.status_code == 303
+    db.refresh(run)
+    assert run.pause_requested is True
+
+    run.status = "paused"
+    run.pause_requested = False
+    db.commit()
+    resumed = client.post(f"/admin/crawl/{run.id}/resume", follow_redirects=False)
+    assert resumed.status_code == 303
+    db.refresh(run)
+    assert run.status == "pending"
+    assert run.pause_requested is False
+    assert called[-1][0][0] is True
+
+    updated_timeout = client.post(
+        f"/sources/{source.id}/timeout",
+        data={"timeout_seconds": "11"},
+        follow_redirects=False,
+    )
+    assert updated_timeout.status_code == 303
+    db.refresh(source)
+    assert source.timeout_seconds == 11
 
     toggled = client.post(f"/sources/{source.id}/toggle", follow_redirects=False)
     assert toggled.status_code == 303

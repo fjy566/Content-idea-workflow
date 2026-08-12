@@ -31,6 +31,12 @@ CHINA_SOURCE_PRESETS: tuple[SourcePreset, ...] = (
     SourcePreset("极客公园", "https://www.geekpark.net/rss"),
     SourcePreset("量子位", "https://www.qbitai.com/feed"),
     SourcePreset("钛媒体", "https://www.tmtpost.com/feed"),
+    SourcePreset("InfoQ中国", "https://www.infoq.cn/feed"),
+    SourcePreset("开源中国", "https://www.oschina.net/news/rss"),
+    SourcePreset("V2EX", "https://www.v2ex.com/index.xml"),
+    SourcePreset("SegmentFault", "https://segmentfault.com/feeds"),
+    SourcePreset("雷锋网", "https://www.leiphone.com/feed"),
+    SourcePreset("人人都是产品经理", "https://www.woshipm.com/feed"),
 )
 
 
@@ -46,12 +52,17 @@ CHINA_SOURCE_HOSTS = frozenset(
         "geekpark.net",
         "qbitai.com",
         "tmtpost.com",
+        "infoq.cn",
+        "oschina.net",
+        "v2ex.com",
+        "segmentfault.com",
         "36kr.com",
         "huxiu.com",
         "jiemian.com",
         "pingwest.com",
         "leiphone.com",
         "donews.com",
+        "woshipm.com",
     }
 )
 
