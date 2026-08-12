@@ -2,7 +2,7 @@
 <article class="topic-row">
   <a class="topic-row-link" href="/topics/{{ topic.id }}" aria-label="查看详情：{{ topic.title }}">
     <div class="topic-row-copy">
-      <div class="topic-title-line"><span class="topic-category">{{ topic.display_category }}</span><h2>{{ topic.title }}</h2></div>
+      <div class="topic-title-line"><span class="topic-category">{{ topic.display_category }}</span>{% if topic.is_handled %}<span class="topic-processed">已处理</span>{% endif %}<h2>{{ topic.title }}</h2></div>
       <p>{{ excerpt|truncate(100, true, '…') }}</p>
       <div class="topic-meta">
         <span>{{ topic.source_count }} 个来源</span>

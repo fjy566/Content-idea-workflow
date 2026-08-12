@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ topic.title }} · 选题工作台{% endblock %}
 {% block content %}
-<a class="back-link" href="/">← 返回热点列表</a>
+<a class="back-link" href="/?scope=pending">← 返回待处理推荐</a>
 
 <section class="detail-hero">
   <div class="detail-kicker">
@@ -20,6 +20,7 @@
 {% if notice == 'api_missing' %}
 <div class="alert error">还没有配置文本 API。先完成一次设置，之后每个热点都可以直接生成选题建议。</div>
 {% endif %}
+<div class="alert topic-handled-notice">已记录：你正在查看这个热点。返回列表后，它不会再次出现在“待处理推荐”；需要回看时可打开“全部”或“已处理”。</div>
 
 <div class="detail-layout editorial-layout">
   <div class="detail-main">

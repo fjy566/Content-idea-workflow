@@ -5,7 +5,7 @@ def test_base_layout_contains_accessible_operation_overlay():
     assert 'id="operation-overlay"' in source
     assert 'role="status"' in source
     assert "/static/form-loading.js?v=2" in source
-    assert "/static/enhancements.css?v=3" in source
+    assert "/static/enhancements.css?v=4" in source
 
 
 def test_loading_script_preserves_named_submit_button_before_disabling():

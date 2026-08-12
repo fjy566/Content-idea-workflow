@@ -4,8 +4,8 @@
 <section class="page-header">
   <div>
     <p class="eyebrow">今日选题雷达</p>
-    <h1>先扫标题，再挑值得写的</h1>
-    <p class="muted">点击感兴趣的热点，查看来源并让 AI 给出具体选题角度。</p>
+    <h1>{% if scope == 'pending' %}先看还没处理过的热点{% elif scope == 'handled' %}回看已经处理过的热点{% else %}查看全部热点{% endif %}</h1>
+    <p class="muted">默认推荐会自动排除你已经点开、收藏、生成文章或编辑过的热点，优先把新的选题送到你面前。</p>
   </div>
   <a class="button primary" href="/admin">运行采集</a>
 </section>
@@ -13,13 +13,22 @@
 <form class="searchbar" method="get" action="/">
   <input name="q" value="{{ q }}" placeholder="搜索热点标题或摘要">
   {% if active_category %}<input type="hidden" name="category" value="{{ active_category }}">{% endif %}
+  <input type="hidden" name="scope" value="{{ scope }}">
   <button class="button" type="submit">搜索</button>
 </form>
 
+<nav class="topic-scope-filter" aria-label="热点处理状态">
+  {% for scope_name, label in scope_labels.items() %}
+  <a class="scope-tab {% if scope == scope_name %}active{% endif %}" href="/?scope={{ scope_name }}&q={{ q|urlencode }}{% if active_category %}&category={{ active_category|urlencode }}{% endif %}">
+    <span>{{ label }}</span><strong>{{ scope_counts[scope_name] }}</strong>
+  </a>
+  {% endfor %}
+</nav>
+
 <nav class="category-filter" aria-label="热点分类">
-  <a class="category-pill {% if not active_category %}active{% endif %}" href="/?q={{ q|urlencode }}">全部 <span>{{ category_counts.values()|sum }}</span></a>
+  <a class="category-pill {% if not active_category %}active{% endif %}" href="/?scope={{ scope }}&q={{ q|urlencode }}">全部 <span>{{ category_counts.values()|sum }}</span></a>
   {% for name in category_options %}
-  <a class="category-pill {% if active_category == name %}active{% endif %}" href="/?category={{ name|urlencode }}&q={{ q|urlencode }}">{{ name }} <span>{{ category_counts[name] }}</span></a>
+  <a class="category-pill {% if active_category == name %}active{% endif %}" href="/?scope={{ scope }}&category={{ name|urlencode }}&q={{ q|urlencode }}">{{ name }} <span>{{ category_counts[name] }}</span></a>
   {% endfor %}
 </nav>
 
@@ -32,16 +41,19 @@
 <nav class="pagination-bar" aria-label="热点分页">
   <span>第 {{ page }} / {{ total_pages }} 页，共 {{ total_count }} 条</span>
   <div class="button-row">
-    {% if page > 1 %}<a class="button" href="/?q={{ q|urlencode }}&category={{ active_category|urlencode }}&page={{ page - 1 }}">上一页</a>{% else %}<span class="button disabled">上一页</span>{% endif %}
-    {% if page < total_pages %}<a class="button primary" href="/?q={{ q|urlencode }}&category={{ active_category|urlencode }}&page={{ page + 1 }}">下一页</a>{% else %}<span class="button disabled">下一页</span>{% endif %}
+    {% if page > 1 %}<a class="button" href="/?scope={{ scope }}&q={{ q|urlencode }}&category={{ active_category|urlencode }}&page={{ page - 1 }}">上一页</a>{% else %}<span class="button disabled">上一页</span>{% endif %}
+    {% if page < total_pages %}<a class="button primary" href="/?scope={{ scope }}&q={{ q|urlencode }}&category={{ active_category|urlencode }}&page={{ page + 1 }}">下一页</a>{% else %}<span class="button disabled">下一页</span>{% endif %}
   </div>
 </nav>
 {% else %}
 <section class="empty-state">
   <div class="empty-icon">◌</div>
-  <h2>{% if active_category or q %}没有符合条件的热点{% else %}还没有热点数据{% endif %}</h2>
-  <p>{% if active_category or q %}换一个分类或搜索词试试。{% else %}先添加数据源，再到“任务”页面运行采集。{% endif %}</p>
-  <a class="button primary" href="{% if active_category or q %}/{% else %}/sources{% endif %}">{% if active_category or q %}查看全部{% else %}添加数据源{% endif %}</a>
+  <h2>{% if scope == 'pending' and not active_category and not q %}暂时没有新的待处理热点{% elif active_category or q %}没有符合条件的热点{% else %}还没有热点数据{% endif %}</h2>
+  <p>{% if scope == 'pending' and not active_category and not q %}你已经看过的热点不会反复出现。可以继续采集，或者打开“全部”回看历史。{% elif active_category or q %}换一个分类或搜索词试试。{% else %}先添加数据源，再到“任务”页面运行采集。{% endif %}</p>
+  <div class="button-row">
+    {% if scope == 'pending' %}<a class="button" href="/?scope=all">查看全部</a>{% endif %}
+    <a class="button primary" href="{% if active_category or q %}/?scope={{ scope }}{% else %}/sources{% endif %}">{% if active_category or q %}清除筛选{% else %}添加数据源{% endif %}</a>
+  </div>
 </section>
 {% endif %}
 {% endblock %}

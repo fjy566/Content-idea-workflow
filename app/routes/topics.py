@@ -30,6 +30,7 @@ from ..recommender import record_feedback
 from ..repositories import get_setting
 from ..topic_pipeline import calculate_baseline_score, topic_sources
 from ..topic_recommendations import normalize_recommendations, resolve_writing_angle
+from ..topic_status import is_topic_handled
 from ..utils import clean_text, relative_file_path
 from ..web import templates
 
@@ -100,11 +101,13 @@ def topic_page(request: Request, topic_id: int, db: Session = Depends(get_db)):
         record_feedback(db, topic_id, "view")
     except ValueError:
         pass
+    topic_is_handled = is_topic_handled(topic)
     return templates.TemplateResponse(
         request=request,
         name="topic.html",
         context={
             "topic": topic,
+            "topic_is_handled": topic_is_handled,
             "source_rows": _sources_for(db, topic_id),
             "chat_configured": provider.chat_config.configured,
             "chat_model": provider.chat_config.model,

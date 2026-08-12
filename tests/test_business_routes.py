@@ -24,6 +24,7 @@ from app.models import (
     Base,
     CrawlLog,
     CrawlRun,
+    Feedback,
     RawItem,
     Setting,
     Source,
@@ -101,6 +102,48 @@ def test_app_health_headers_and_delete_route_are_available(client: TestClient):
     assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
     assert response.headers["permissions-policy"] == "camera=(), microphone=(), geolocation=()"
     assert client.get("/articles/1/delete").status_code == 405
+
+
+def test_dashboard_recommends_unhandled_topics_and_remembers_detail_views(
+    client: TestClient,
+    db: Session,
+):
+    unseen = _seed_topic(db, "全新的未处理热点")
+    viewed = _seed_topic(db, "之前已经看过的热点")
+    written = _seed_topic(db, "已经写过文章的热点")
+    db.add(Feedback(topic_id=viewed.id, action="view", value=5))
+    db.add(Article(topic_id=written.id, title="已经写好的文章", content="正文", status="draft"))
+    db.commit()
+
+    pending = client.get("/?scope=pending")
+    assert pending.status_code == 200
+    assert "全新的未处理热点" in pending.text
+    assert "之前已经看过的热点" not in pending.text
+    assert "已经写过文章的热点" not in pending.text
+    assert "待处理" in pending.text
+
+    handled = client.get("/?scope=handled")
+    assert handled.status_code == 200
+    assert "之前已经看过的热点" in handled.text
+    assert "已经写过文章的热点" in handled.text
+    assert "全新的未处理热点" not in handled.text
+
+    all_topics = client.get("/?scope=all")
+    assert all_topics.status_code == 200
+    assert "全新的未处理热点" in all_topics.text
+    assert "之前已经看过的热点" in all_topics.text
+    assert "已经写过文章的热点" in all_topics.text
+
+    detail = client.get(f"/topics/{unseen.id}")
+    assert detail.status_code == 200
+    assert "不会再次出现在“待处理推荐”" in detail.text
+    db.expire_all()
+    assert db.scalar(
+        select(Feedback).where(Feedback.topic_id == unseen.id, Feedback.action == "view")
+    ) is not None
+
+    pending_after_view = client.get("/?scope=pending")
+    assert "全新的未处理热点" not in pending_after_view.text
 
 
 def test_media_mount_exposes_images_but_not_database_or_models(client: TestClient, tmp_path):
