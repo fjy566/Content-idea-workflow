@@ -14,7 +14,14 @@ from .crawler import crawl_source
 from .db import init_db, session_scope
 from .models import AITask, CrawlLog, CrawlRun, Source, Topic, utcnow
 from .repositories import get_setting
-from .topic_pipeline import calculate_baseline_score, ingest_items, mark_source_error, topic_sources
+from .topic_pipeline import (
+    calculate_baseline_score,
+    ingest_items,
+    mark_source_error,
+    refresh_all_topic_scores,
+    refresh_topic_score_mix,
+    topic_sources,
+)
 from .topic_recommendations import normalize_recommendations
 from .utils import as_utc, clean_text
 
@@ -125,6 +132,27 @@ def _crawl_log(db, run_id: int, message: str, source_name: str | None = None, le
     db.commit()
 
 
+def _refresh_crawl_scores(db, topic_ids: set[int]) -> dict[str, object]:
+    """Refresh one crawl round in batches, then apply a saved model once."""
+    if not topic_ids:
+        return {"topics": 0, "model_scored": 0, "device": "NONE", "seconds": 0.0}
+    started = time.perf_counter()
+    refresh_all_topic_scores(db, topic_ids)
+    from .recommender import apply_saved_model_scores
+
+    model_result = apply_saved_model_scores(db, topic_ids)
+    if model_result.get("scored", 0):
+        # The final blended score needs the new model_score values, but the
+        # raw-item statistics were already calculated in the first pass.
+        refresh_topic_score_mix(db, topic_ids)
+    return {
+        "topics": len(topic_ids),
+        "model_scored": int(model_result.get("scored", 0)),
+        "device": str(model_result.get("device", "NONE")),
+        "seconds": round(time.perf_counter() - started, 4),
+    }
+
+
 def run_crawl_cycle(
     force: bool = False,
     source_ids: list[int] | None = None,
@@ -134,6 +162,7 @@ def run_crawl_cycle(
     """Run one bounded pass over selected sources; never invokes a paid AI API."""
     init_db()
     result = {"sources": 0, "items": 0, "errors": 0}
+    cycle_topic_ids: set[int] = set()
     with session_scope() as db:
         run = db.get(CrawlRun, run_id) if run_id else None
         effective_source_ids = _source_ids_from_run(run, source_ids) if run is not None else source_ids
@@ -174,15 +203,21 @@ def run_crawl_cycle(
             if source.id in completed_ids:
                 continue
             if run.pause_requested:
+                score_result = _refresh_crawl_scores(db, cycle_topic_ids)
                 run.status = "paused"
                 run.finished_at = utcnow()
                 db.commit()
+                if score_result["topics"]:
+                    _crawl_log(db, run.id, f"推荐度已批量更新：{score_result['topics']} 个热点，模型设备 {score_result['device']}，耗时 {score_result['seconds']} 秒")
                 _crawl_log(db, run.id, "已按请求暂停：当前源已完成，保留已完成进度。")
                 return result
             if time.monotonic() >= deadline:
+                score_result = _refresh_crawl_scores(db, cycle_topic_ids)
                 run.status = "timeout"
                 run.finished_at = utcnow()
                 db.commit()
+                if score_result["topics"]:
+                    _crawl_log(db, run.id, f"推荐度已批量更新：{score_result['topics']} 个热点，模型设备 {score_result['device']}，耗时 {score_result['seconds']} 秒")
                 _crawl_log(db, run.id, f"本轮采集超时：达到设定的 {_round_timeout(run.timeout_seconds)} 秒总时限。", level="error")
                 return result
 
@@ -200,7 +235,13 @@ def run_crawl_cycle(
                 _crawl_log(db, run.id, "开始采集。", source.name)
                 remaining = max(1, int(deadline - time.monotonic()))
                 items = crawl_source(source, remaining)
-                inserted, _attached = ingest_items(db, source, items)
+                inserted, _attached = ingest_items(
+                    db,
+                    source,
+                    items,
+                    refresh_scores=False,
+                    touched_topic_ids=cycle_topic_ids,
+                )
                 result["items"] += inserted
                 run.new_items += inserted
                 _crawl_log(db, run.id, f"完成：解析 {len(items)} 条，新增 {inserted} 条。", source.name)
@@ -217,6 +258,9 @@ def run_crawl_cycle(
             run.processed_sources = len(completed_ids)
             db.commit()
 
+        score_result = _refresh_crawl_scores(db, cycle_topic_ids)
+        if score_result["topics"]:
+            _crawl_log(db, run.id, f"推荐度已批量更新：{score_result['topics']} 个热点，模型设备 {score_result['device']}，耗时 {score_result['seconds']} 秒")
         remaining_sources = any(source.id not in completed_ids for source in sources)
         if run.pause_requested and remaining_sources:
             run.status = "paused"

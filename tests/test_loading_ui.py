@@ -76,7 +76,7 @@ def test_recommender_exposes_device_choice_and_real_progress_polling():
     assert 'value="cuda"' in source
     assert 'id="training-progress-bar"' in source
     assert 'data-status-url="/recommender/training/{{ training_run.id }}/status"' in source
-    assert 'src="/static/recommender.js?v=1"' in source
+    assert 'src="/static/recommender.js?v=2"' in source
     assert "setInterval(poll, 1000)" in script
     assert "fetch(statusUrl" in script
     assert 'training_device: str = Form("auto")' in route

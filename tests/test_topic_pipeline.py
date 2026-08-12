@@ -7,4 +7,3 @@ def test_conflict_heuristic_detects_conflict_terms():
 
 def test_risk_heuristic_detects_unverified_terms():
     assert heuristic_risk("网传某事件", "") > 0
-

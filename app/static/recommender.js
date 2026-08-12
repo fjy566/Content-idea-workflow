@@ -41,6 +41,8 @@
       ["验证 MAE", metrics.validation_mae],
       ["验证 RMSE", metrics.validation_rmse],
       ["验证 R²", metrics.validation_r2],
+      ["模型评分设备", metrics.score_device || metrics.prediction_device],
+      ["批量评分", metrics.score_seconds == null ? null : `${metrics.score_seconds} 秒`],
       ["训练耗时", metrics.training_seconds == null ? null : `${metrics.training_seconds} 秒`],
     ].filter((item) => item[1] !== null && item[1] !== undefined);
     liveMetrics.textContent = values.map((item) => `${item[0]}：${item[1]}`).join("　");

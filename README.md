@@ -30,6 +30,7 @@
 - 热点库按数据库分页，每页 30 条；搜索和分类筛选会保留分页条件，不再把上千条记录一次性加载到浏览器。
 - 推荐列表默认只显示“待处理”热点：已经点开、收藏、不感兴趣、生成过文章、编辑过文章或已有文章的热点不会反复占用推荐位；“全部”和“已处理”入口仍可找回历史热点。
 - 排序指标包含新鲜度、来源覆盖、传播速度、内容质量、冲突度、风险度、模型分和用户行为反馈。
+- 采集评分按整轮批量执行：空采集不会触发全表评分，多数据源产生的热点只会在本轮结束时刷新一次；规则统计使用批量 SQL，已训练的 CUDA 版 XGBoost 模型会批量尝试 GPU 预测并在异常时回退 CPU。
 
 ### 中国真实数据源
 
@@ -95,7 +96,8 @@ flowchart LR
   S[中国公开 RSS/HTML] --> C[采集器]
   C --> R[(SQLite WAL)]
   R --> P[去重与热点聚类]
-  P --> D[分类/推荐度/分页热点库]
+  P --> B[批量规则评分/可选 CUDA 模型评分]
+  B --> D[分类/推荐度/分页热点库]
   D --> A[用户手动调用文本 API]
   A --> W[文章初稿]
   W --> E[Markdown 编辑器]
@@ -117,7 +119,7 @@ app/
 ├─ article_format.py       Markdown 渲染、图片查询、图片位置规划插入
 ├─ ai_provider.py          OpenAI-compatible 文本/图片 API 客户端
 ├─ image_search.py         360 图片中国搜索与安全下载
-├─ recommender.py           反馈、CPU/CUDA 训练、进度回调和模型指标
+├─ recommender.py           反馈、CPU/CUDA 训练、批量模型评分、进度回调和模型指标
 ├─ routes/                 dashboard/sources/settings/topics/articles/admin
 ├─ templates/              Jinja2 页面
 └─ static/                 原生 JS/CSS
@@ -145,13 +147,15 @@ python -m pip install -e ".[dev]"
 python -m pip install -e ".[gpu]"
 ```
 
+同一套 CUDA 版 XGBoost 同时用于训练和采集后的模型评分；不安装或检测不到 CUDA 时，规则评分和模型评分都会自动使用 CPU，不影响采集功能。
+
 打开“推荐模型”页面后，可以选择：
 
 - 自动选择：优先使用可用的 CUDA，否则使用 CPU。
 - CPU：使用 scikit-learn 训练，兼容性最好。
 - CUDA：使用启用 CUDA 的 XGBoost 训练；如果显卡、驱动或 XGBoost CUDA 支持不完整，选项会被禁用并显示具体原因。
 
-训练不会因为页面刷新而丢失状态。训练任务完成后，页面会展示实际算法、实际设备、训练/验证样本、MAE、RMSE、R²、基线 MAE、目标范围、特征重要性和训练耗时。CUDA 只用于训练，热点日常打分仍使用 CPU。
+训练不会因为页面刷新而丢失状态。训练任务完成后，页面会展示实际算法、训练设备、模型批量评分设备、训练/验证样本、MAE、RMSE、R²、基线 MAE、目标范围、特征重要性、评分数量和耗时。采集后的规则评分始终使用批量 CPU 计算；如果已有 CUDA 版 XGBoost 模型，模型分会自动批量使用 CUDA，异常时自动回退 CPU。
 
 ### 动态网页采集（可选）
 

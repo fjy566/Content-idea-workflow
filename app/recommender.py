@@ -8,7 +8,6 @@ import subprocess
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +22,7 @@ from .config import settings
 from .categories import CATEGORY_OPTIONS, categorize_topic
 from .models import Feedback, ModelArtifact, Topic, utcnow
 from .repositories import delete_old_model_artifacts, get_setting, latest_model_artifact
-from .topic_pipeline import refresh_all_topic_scores
+from .topic_pipeline import refresh_all_topic_scores, refresh_topic_score_mix
 from .utils import as_utc, clamp, clean_text, parse_csv_keywords, tokenize
 
 
@@ -94,11 +93,9 @@ FEEDBACK_LABELS = {
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
-def feature_vector(db: Session, topic: Topic) -> list[float]:
-    age_hours = max(0.0, (utcnow() - as_utc(topic.last_seen_at)).total_seconds() / 3600)
+def _feature_vector_for_settings(topic: Topic, preferred: list[str], blocked: list[str], now) -> list[float]:
+    age_hours = max(0.0, (now - as_utc(topic.last_seen_at)).total_seconds() / 3600)
     freshness = max(0.0, 1.0 - age_hours / 72.0)
-    preferred = parse_csv_keywords(get_setting(db, "preferred_keywords"))
-    blocked = parse_csv_keywords(get_setting(db, "blocked_keywords"))
     text = f"{topic.title} {topic.summary}".lower()
     tokens = tokenize(text)
     preferred_match = sum(1 for value in preferred if value in tokens or value in text) / max(1, len(preferred))
@@ -126,6 +123,22 @@ def feature_vector(db: Session, topic: Topic) -> list[float]:
         min(1.0, len(topic.ai_audience or []) / 5.0),
     ]
     return base + [1.0 if category == value else 0.0 for value in CATEGORY_OPTIONS]
+
+
+def feature_vector(db: Session, topic: Topic) -> list[float]:
+    return _feature_vector_for_settings(
+        topic,
+        parse_csv_keywords(get_setting(db, "preferred_keywords")),
+        parse_csv_keywords(get_setting(db, "blocked_keywords")),
+        utcnow(),
+    )
+
+
+def _feature_matrix(db: Session, topics: list[Topic]) -> list[list[float]]:
+    preferred = parse_csv_keywords(get_setting(db, "preferred_keywords"))
+    blocked = parse_csv_keywords(get_setting(db, "blocked_keywords"))
+    now = utcnow()
+    return [_feature_vector_for_settings(topic, preferred, blocked, now) for topic in topics]
 
 
 def gpu_status() -> dict[str, Any]:
@@ -238,11 +251,9 @@ def _fit_with_fallback(
     return model, algorithm, device
 
 
-def _use_cpu_for_prediction(model, training_device: str, metrics: dict[str, Any]) -> None:
-    """Keep CUDA for fitting, then avoid CPU-input/CUDA-booster prediction copies."""
-    if training_device == "CUDA" and hasattr(model, "get_booster"):
-        model.get_booster().set_param({"device": "cpu"})
-        metrics["prediction_device"] = "CPU"
+def _record_prediction_device(model, training_device: str, metrics: dict[str, Any]) -> None:
+    """Keep a CUDA-trained booster on CUDA for validation and later scoring."""
+    metrics["prediction_device"] = training_device if hasattr(model, "get_booster") else "CPU"
 
 
 def record_feedback(db: Session, topic_id: int, action: str, article_id: int | None = None) -> Feedback:
@@ -259,7 +270,7 @@ def _training_rows(db: Session) -> tuple[list[list[float]], list[float]]:
     feedback_by_topic: dict[int, list[Feedback]] = defaultdict(list)
     for feedback in db.scalars(select(Feedback).order_by(Feedback.created_at.asc())):
         feedback_by_topic[feedback.topic_id].append(feedback)
-    x: list[list[float]] = []
+    sample_topics: list[Topic] = []
     y: list[float] = []
     for topic_id, events in feedback_by_topic.items():
         topic = topics.get(topic_id)
@@ -268,9 +279,9 @@ def _training_rows(db: Session) -> tuple[list[list[float]], list[float]]:
         positive = sum(event.value for event in events if event.value >= 0)
         negative = sum(abs(event.value) for event in events if event.value < 0)
         target = clamp(positive - negative)
-        x.append(feature_vector(db, topic))
+        sample_topics.append(topic)
         y.append(target)
-    return x, y
+    return _feature_matrix(db, sample_topics), y
 
 
 def train_model(
@@ -320,9 +331,9 @@ def train_model(
             metrics,
             progress_callback,
         )
-        _use_cpu_for_prediction(model, device, metrics)
+        _record_prediction_device(model, device, metrics)
         _notify_progress(progress_callback, "evaluating", 72, "模型训练完成，正在计算验证指标。", device=device)
-        predictions = model.predict(test_x)
+        predictions = _predict_model_matrix(model, test_x, device)
         baseline_prediction = sum(train_y) / len(train_y)
         baseline_predictions = [baseline_prediction] * len(test_y)
         metrics["train_samples"] = len(train_x)
@@ -344,7 +355,7 @@ def train_model(
             metrics,
             progress_callback,
         )
-        _use_cpu_for_prediction(model, device, metrics)
+        _record_prediction_device(model, device, metrics)
         _notify_progress(progress_callback, "evaluating", 72, "样本不足以划分独立验证集，正在保存训练结果。", device=device)
         metrics["validation_mae"] = None
         metrics["validation_rmse"] = None
@@ -375,7 +386,15 @@ def train_model(
     _notify_progress(progress_callback, "scoring", 86, "正在把模型分应用到全部热点。", metrics=metrics, device=device)
     path = settings.model_dir / "topic_recommender.joblib"
     joblib.dump({"model": model, "features": FEATURE_NAMES}, path)
-    _apply_model_scores(db, model)
+    score_metrics = _apply_model_scores(db, model, hardware=hardware)
+    metrics.update(
+        {
+            "score_device": score_metrics["device"],
+            "score_seconds": score_metrics["seconds"],
+            "score_count": score_metrics["scored"],
+            "score_gpu_fallback": score_metrics["gpu_fallback"],
+        }
+    )
     model_scores = [float(topic.model_score) for topic in db.scalars(select(Topic)) if topic.model_score is not None]
     if model_scores:
         metrics["score_min"] = round(min(model_scores), 4)
@@ -410,19 +429,92 @@ def _load_model(db: Session):
         return None
 
 
-def _apply_model_scores(db: Session, model) -> None:
-    for topic in db.scalars(select(Topic)):
-        prediction = float(model.predict([feature_vector(db, topic)])[0])
-        topic.model_score = clamp(prediction)
+def _set_model_device(model, device: str) -> None:
+    if not hasattr(model, "get_booster"):
+        return
+    model.get_booster().set_param({"device": "cuda" if device == "CUDA" else "cpu"})
 
 
-def apply_saved_model(db: Session) -> bool:
+def _predict_model_matrix(model, matrix: list[list[float]], device: str):
+    """Predict once for a matrix and use a device-aware XGBoost path when possible."""
+    if device == "CUDA" and hasattr(model, "get_booster"):
+        booster = model.get_booster()
+        if callable(getattr(booster, "predict", None)):
+            try:
+                import xgboost as xgb
+
+                return booster.predict(xgb.DMatrix(matrix))
+            except ImportError:
+                pass
+    return model.predict(matrix)
+
+
+def _apply_model_scores(
+    db: Session,
+    model,
+    topic_ids: set[int] | None = None,
+    hardware: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if topic_ids is not None and not topic_ids:
+        return {"scored": 0, "device": "NONE", "seconds": 0.0, "gpu_fallback": False}
+    if topic_ids is None:
+        topics = list(db.scalars(select(Topic)))
+    else:
+        topics = []
+        topic_id_list = list(topic_ids)
+        for start in range(0, len(topic_id_list), 500):
+            batch_ids = topic_id_list[start : start + 500]
+            topics.extend(db.scalars(select(Topic).where(Topic.id.in_(batch_ids))))
+    if not topics:
+        return {"scored": 0, "device": "NONE", "seconds": 0.0, "gpu_fallback": False}
+
+    hardware = hardware or gpu_status()
+    use_cuda = bool(hardware.get("cuda_ready") and hasattr(model, "get_booster"))
+    device = "CUDA" if use_cuda else "CPU"
+    matrix = _feature_matrix(db, topics)
+    started = time.perf_counter()
+    fallback = False
+    try:
+        _set_model_device(model, device)
+        predictions = _predict_model_matrix(model, matrix, device)
+    except Exception as exc:
+        if device != "CUDA":
+            raise
+        logger.exception("CUDA recommendation scoring failed; falling back to CPU")
+        _set_model_device(model, "CPU")
+        predictions = _predict_model_matrix(model, matrix, "CPU")
+        device = "CPU"
+        fallback = True
+        logger.warning("CUDA recommendation scoring fallback: %s", exc)
+    for topic, prediction in zip(topics, predictions, strict=True):
+        topic.model_score = clamp(float(prediction))
+    return {
+        "scored": len(topics),
+        "device": device,
+        "seconds": round(time.perf_counter() - started, 4),
+        "gpu_fallback": fallback,
+    }
+
+
+def apply_saved_model_scores(
+    db: Session,
+    topic_ids: set[int] | None = None,
+    hardware: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     model = _load_model(db)
     if model is None:
-        return False
-    _apply_model_scores(db, model)
+        return {"available": False, "scored": 0, "device": "NONE", "seconds": 0.0, "gpu_fallback": False}
+    result = _apply_model_scores(db, model, topic_ids=topic_ids, hardware=hardware)
     db.commit()
-    refresh_all_topic_scores(db)
+    result["available"] = True
+    return result
+
+
+def apply_saved_model(db: Session, topic_ids: set[int] | None = None) -> bool:
+    result = apply_saved_model_scores(db, topic_ids=topic_ids)
+    if not result["available"]:
+        return False
+    refresh_topic_score_mix(db, topic_ids)
     return True
 
 
@@ -471,13 +563,20 @@ def recommender_status(db: Session) -> dict[str, Any]:
             quality_note = "模型已有学习效果但稳定性偏弱，建议继续积累不同类型的真实反馈。"
         else:
             quality_note = "模型在当前验证集上已有可用区分能力，仍应结合来源质量与风险指标判断。"
+    latest_metrics = artifact.metrics_json or {} if artifact else {}
+    hardware = gpu_status()
+    model_score_device = latest_metrics.get("score_device")
+    if not model_score_device and artifact and latest_metrics.get("device") == "CUDA" and hardware.get("cuda_ready"):
+        model_score_device = "CUDA（可用）"
+    model_score_device = model_score_device or "CPU（规则评分）"
     return {
         "trained": artifact is not None and Path(artifact.path).exists(),
         "sample_count": sample_count,
         "artifact": artifact,
         "feature_names": FEATURE_NAMES,
         "feature_definitions": [{"name": name, "label": FEATURE_LABELS.get(name, name)} for name in FEATURE_NAMES],
-        "hardware": gpu_status(),
+        "hardware": hardware,
+        "model_score_device": model_score_device,
         "samples_needed": max(0, 8 - sample_count),
         "topic_count": len(topics),
         "feedback_event_count": len(feedback_events),

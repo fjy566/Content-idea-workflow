@@ -52,7 +52,7 @@ def test_one_crawl_cycle_never_calls_ai_analysis(monkeypatch):
     monkeypatch.setattr(scheduler, "init_db", lambda: None)
     monkeypatch.setattr(scheduler, "session_scope", fake_scope)
     monkeypatch.setattr(scheduler, "crawl_source", lambda _source, _timeout=None: [])
-    monkeypatch.setattr(scheduler, "ingest_items", lambda _db, _source, _items: (0, 0))
+    monkeypatch.setattr(scheduler, "ingest_items", lambda _db, _source, _items, **_kwargs: (0, 0))
     monkeypatch.setattr(scheduler, "analyze_pending_topics", lambda _limit=10: called.__setitem__("ai", called["ai"] + 1))
 
     scheduler.run_crawl_cycle(force=True)
@@ -90,7 +90,7 @@ def test_pause_and_resume_continues_only_unfinished_sources(monkeypatch):
     monkeypatch.setattr(scheduler, "init_db", lambda: None)
     monkeypatch.setattr(scheduler, "session_scope", fake_scope)
     monkeypatch.setattr(scheduler, "crawl_source", fake_crawl)
-    monkeypatch.setattr(scheduler, "ingest_items", lambda _db, _source, _items: (0, 0))
+    monkeypatch.setattr(scheduler, "ingest_items", lambda _db, _source, _items, **_kwargs: (0, 0))
 
     scheduler.run_crawl_cycle(force=True)
 
@@ -140,7 +140,7 @@ def test_round_timeout_stops_before_starting_next_source(monkeypatch):
     monkeypatch.setattr(scheduler, "session_scope", fake_scope)
     monkeypatch.setattr(scheduler, "time", SimpleNamespace(monotonic=lambda: next(clock_values)))
     monkeypatch.setattr(scheduler, "crawl_source", lambda source, _timeout=None: calls.append(source.name) or [])
-    monkeypatch.setattr(scheduler, "ingest_items", lambda _db, _source, _items: (0, 0))
+    monkeypatch.setattr(scheduler, "ingest_items", lambda _db, _source, _items, **_kwargs: (0, 0))
 
     scheduler.run_crawl_cycle(force=True, run_id=run.id)
 

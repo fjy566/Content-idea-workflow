@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections import Counter
+from collections import defaultdict
 from datetime import timedelta
 
 from sqlalchemy import select
@@ -29,8 +29,6 @@ def _title_similarity(left: str, right: str) -> float:
     intersection = len(left_tokens & right_tokens)
     union = len(left_tokens | right_tokens)
     jaccard = intersection / union if union else 0.0
-    compact_left = "".join(left_tokens)
-    compact_right = "".join(right_tokens)
     common = sum(1 for token in left_tokens if token in right_tokens)
     char_overlap = common / max(1, max(len(left_tokens), len(right_tokens)))
     return max(jaccard, char_overlap * 0.8)
@@ -68,10 +66,17 @@ def _find_topic_from_candidates(candidates: list[Topic], title: str) -> Topic | 
     return best if best_score >= 0.34 else None
 
 
-def ingest_items(db: Session, source: Source, items: list[CrawledItem]) -> tuple[int, int]:
+def ingest_items(
+    db: Session,
+    source: Source,
+    items: list[CrawledItem],
+    *,
+    refresh_scores: bool = True,
+    touched_topic_ids: set[int] | None = None,
+) -> tuple[int, int]:
     inserted = 0
     attached = 0
-    touched_topic_ids: set[int] = set()
+    batch_topic_ids: set[int] = set()
     # Candidate topics are stable for the duration of one source batch.  The
     # old implementation queried and materialized up to 500 topics per item.
     candidates = _topic_candidates(db)
@@ -119,14 +124,17 @@ def ingest_items(db: Session, source: Source, items: list[CrawledItem]) -> tuple
             topic.risk_score = max(topic.risk_score, heuristic_risk(item.title, item.summary))
             topic.category = categorize_topic(topic.title, topic.summary, topic.ai_tags)
         db.add(TopicItem(topic_id=topic.id, raw_item_id=raw.id))
-        touched_topic_ids.add(topic.id)
+        batch_topic_ids.add(topic.id)
         inserted += 1
         attached += 1
     source.last_crawled_at = utcnow()
     source.last_success_at = utcnow()
     source.last_error = None
     db.commit()
-    refresh_all_topic_scores(db, touched_topic_ids)
+    if touched_topic_ids is not None:
+        touched_topic_ids.update(batch_topic_ids)
+    if refresh_scores:
+        refresh_all_topic_scores(db, touched_topic_ids if touched_topic_ids is not None else batch_topic_ids)
     return inserted, attached
 
 
@@ -148,14 +156,11 @@ def _topic_rows(db: Session, topic: Topic):
     )
 
 
-def refresh_topic_stats(db: Session, topic: Topic) -> None:
-    rows = _topic_rows(db, topic)
-    if not rows:
+def _refresh_topic_stats_from_items(topic: Topic, raw_items: list[RawItem], now) -> None:
+    if not raw_items:
         return
-    raw_items = [row[0] for row in rows]
     topic.item_count = len(raw_items)
     topic.source_count = len({item.source_id for item in raw_items})
-    now = utcnow()
     recent_count = sum(1 for item in raw_items if (now - as_utc(item.published_at or item.fetched_at)).total_seconds() <= 6 * 3600)
     topic.source_velocity = recent_count / 6.0
     average_summary_length = sum(len(item.summary or item.content) for item in raw_items) / len(raw_items)
@@ -170,16 +175,18 @@ def refresh_topic_stats(db: Session, topic: Topic) -> None:
     )
 
 
-def calculate_baseline_score(db: Session, topic: Topic) -> float:
-    refresh_topic_stats(db, topic)
-    age_hours = max(0.0, (utcnow() - as_utc(topic.last_seen_at)).total_seconds() / 3600)
+def refresh_topic_stats(db: Session, topic: Topic) -> None:
+    rows = _topic_rows(db, topic)
+    _refresh_topic_stats_from_items(topic, [row[0] for row in rows], utcnow())
+
+
+def _calculate_topic_score(topic: Topic, keywords: list[str], blocked: list[str], now) -> float:
+    age_hours = max(0.0, (now - as_utc(topic.last_seen_at)).total_seconds() / 3600)
     freshness = math.exp(-age_hours / 30.0)
     coverage = min(1.0, topic.source_count / 5.0)
     velocity = min(1.0, topic.source_velocity / 3.0)
     quality = min(1.0, topic.content_quality / 100.0)
     conflict = min(1.0, topic.conflict_score / 100.0)
-    keywords = parse_csv_keywords(get_setting(db, "preferred_keywords"))
-    blocked = parse_csv_keywords(get_setting(db, "blocked_keywords"))
     topic_tokens = tokenize(f"{topic.title} {topic.summary}")
     preferred_hits = sum(1 for keyword in keywords if keyword in topic_tokens or keyword in topic.title.lower())
     blocked_hits = sum(1 for keyword in blocked if keyword in topic.title.lower() or keyword in topic.summary.lower())
@@ -201,13 +208,70 @@ def calculate_baseline_score(db: Session, topic: Topic) -> float:
     return topic.recommendation_score
 
 
+def calculate_baseline_score(db: Session, topic: Topic) -> float:
+    refresh_topic_stats(db, topic)
+    return _calculate_topic_score(
+        topic,
+        parse_csv_keywords(get_setting(db, "preferred_keywords")),
+        parse_csv_keywords(get_setting(db, "blocked_keywords")),
+        utcnow(),
+    )
+
+
+def _topic_raw_items_by_id(db: Session, topic_ids: set[int]) -> dict[int, list[RawItem]]:
+    if not topic_ids:
+        return {}
+    grouped: dict[int, list[RawItem]] = defaultdict(list)
+    topic_id_list = list(topic_ids)
+    for start in range(0, len(topic_id_list), 500):
+        batch_ids = topic_id_list[start : start + 500]
+        rows = db.execute(
+            select(TopicItem.topic_id, RawItem)
+            .join(RawItem, TopicItem.raw_item_id == RawItem.id)
+            .where(TopicItem.topic_id.in_(batch_ids))
+        )
+        for topic_id, raw_item in rows:
+            grouped[int(topic_id)].append(raw_item)
+    return grouped
+
+
 def refresh_all_topic_scores(db: Session, topic_ids: set[int] | None = None) -> None:
+    # None means a deliberate full refresh; an empty set means this batch did
+    # not touch any topics and must not accidentally trigger a full-table scan.
+    if topic_ids is not None and not topic_ids:
+        return
     statement = select(Topic)
-    if topic_ids:
+    if topic_ids is not None:
         statement = statement.where(Topic.id.in_(topic_ids))
     topics = list(db.scalars(statement))
+    if not topics:
+        return
+    raw_items_by_topic = _topic_raw_items_by_id(db, {topic.id for topic in topics})
+    keywords = parse_csv_keywords(get_setting(db, "preferred_keywords"))
+    blocked = parse_csv_keywords(get_setting(db, "blocked_keywords"))
+    now = utcnow()
     for topic in topics:
-        calculate_baseline_score(db, topic)
+        _refresh_topic_stats_from_items(topic, raw_items_by_topic.get(topic.id, []), now)
+        _calculate_topic_score(topic, keywords, blocked, now)
+    db.commit()
+
+
+def refresh_topic_score_mix(db: Session, topic_ids: set[int] | None = None) -> None:
+    """Rebuild only the baseline/model blend after model predictions change."""
+    if topic_ids is not None and not topic_ids:
+        return
+    if topic_ids is None:
+        topics = list(db.scalars(select(Topic)))
+    else:
+        topics = []
+        topic_id_list = list(topic_ids)
+        for start in range(0, len(topic_id_list), 500):
+            batch_ids = topic_id_list[start : start + 500]
+            topics.extend(db.scalars(select(Topic).where(Topic.id.in_(batch_ids))))
+    for topic in topics:
+        topic.recommendation_score = clamp(
+            topic.baseline_score * 0.55 + (topic.model_score or topic.baseline_score) * 0.45
+        )
     db.commit()
 
 

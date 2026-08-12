@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import app.recommender as recommender
@@ -85,3 +85,91 @@ def test_cuda_request_is_rejected_when_cuda_is_unavailable(monkeypatch):
         assert "测试环境没有 CUDA" in str(exc)
     else:
         raise AssertionError("CUDA request should fail when CUDA is unavailable")
+
+
+def test_model_scores_are_predicted_in_one_batch_and_use_cuda_when_ready():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    class Booster:
+        def __init__(self):
+            self.devices = []
+
+        def set_param(self, values):
+            self.devices.append(values["device"])
+
+    class BatchModel:
+        def __init__(self):
+            self.booster = Booster()
+            self.calls = []
+
+        def get_booster(self):
+            return self.booster
+
+        def predict(self, matrix):
+            self.calls.append(matrix)
+            return [120.0, 35.0]
+
+    with Session(engine) as db:
+        db.add_all([
+            Topic(title="批量评分选题 1", summary="摘要 1"),
+            Topic(title="批量评分选题 2", summary="摘要 2"),
+        ])
+        db.commit()
+        model = BatchModel()
+
+        result = recommender._apply_model_scores(
+            db,
+            model,
+            hardware={"cuda_ready": True},
+        )
+
+        assert result["device"] == "CUDA"
+        assert result["scored"] == 2
+        assert result["gpu_fallback"] is False
+        assert len(model.calls) == 1
+        assert len(model.calls[0]) == 2
+        assert model.booster.devices == ["cuda"]
+        assert [topic.model_score for topic in db.scalars(select(Topic)).all()] == [100.0, 35.0]
+
+
+def test_cuda_score_failure_falls_back_to_cpu():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+
+    class Booster:
+        def __init__(self):
+            self.device = None
+
+        def set_param(self, values):
+            self.device = values["device"]
+
+    class FallbackModel:
+        def __init__(self):
+            self.booster = Booster()
+            self.devices = []
+
+        def get_booster(self):
+            return self.booster
+
+        def predict(self, _matrix):
+            self.devices.append(self.booster.device)
+            if self.booster.device == "cuda":
+                raise RuntimeError("GPU test failure")
+            return [42.0]
+
+    with Session(engine) as db:
+        db.add(Topic(title="回退评分选题", summary="摘要"))
+        db.commit()
+        model = FallbackModel()
+
+        result = recommender._apply_model_scores(
+            db,
+            model,
+            hardware={"cuda_ready": True},
+        )
+
+        assert result["device"] == "CPU"
+        assert result["gpu_fallback"] is True
+        assert model.devices == ["cuda", "cpu"]
+        assert db.scalar(select(Topic)).model_score == 42.0

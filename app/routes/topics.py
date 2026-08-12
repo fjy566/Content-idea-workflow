@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -28,7 +26,7 @@ from ..image_search import DEFAULT_IMAGE_SEARCH_PROVIDER, image_search_label, se
 from ..models import AITask, Article, GeneratedImage, RawItem, Source, Topic, TopicItem, utcnow
 from ..recommender import record_feedback
 from ..repositories import get_setting
-from ..topic_pipeline import calculate_baseline_score, topic_sources
+from ..topic_pipeline import calculate_baseline_score
 from ..topic_recommendations import normalize_recommendations, resolve_writing_angle
 from ..topic_status import is_topic_handled
 from ..utils import clean_text, relative_file_path

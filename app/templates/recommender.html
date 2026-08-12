@@ -35,6 +35,7 @@
     {% if status.artifact %}{% set metrics = status.artifact.metrics_json %}
     <dl class="metric-list expanded-metrics">
       <div><dt>算法</dt><dd>{{ metrics.algorithm }}</dd></div><div><dt>训练设备</dt><dd>{{ metrics.device }}</dd></div><div><dt>训练耗时</dt><dd>{{ metrics.training_seconds if metrics.training_seconds is defined else '—' }} 秒</dd></div>
+      <div><dt>模型评分设备</dt><dd>{{ metrics.score_device if metrics.score_device is defined else (metrics.prediction_device if metrics.prediction_device is defined else 'CPU') }}</dd></div><div><dt>批量评分耗时</dt><dd>{{ metrics.score_seconds if metrics.score_seconds is defined else '—' }} 秒</dd></div><div><dt>评分数量</dt><dd>{{ metrics.score_count if metrics.score_count is defined else '—' }}</dd></div>
       <div><dt>训练样本</dt><dd>{{ metrics.train_samples if metrics.train_samples is defined else metrics.samples }}</dd></div><div><dt>验证样本</dt><dd>{{ metrics.validation_samples if metrics.validation_samples is defined else '—' }}</dd></div><div><dt>特征数量</dt><dd>{{ metrics.feature_count }}</dd></div>
       <div><dt>验证 MAE</dt><dd>{{ metrics.validation_mae if metrics.validation_mae is not none else '—' }}</dd></div><div><dt>验证 RMSE</dt><dd>{{ metrics.validation_rmse if metrics.validation_rmse is not none else '—' }}</dd></div><div><dt>验证 R²</dt><dd>{{ metrics.validation_r2 if metrics.validation_r2 is defined and metrics.validation_r2 is not none else '—' }}</dd></div>
       <div><dt>基线 MAE</dt><dd>{{ metrics.baseline_mae if metrics.baseline_mae is defined and metrics.baseline_mae is not none else '—' }}</dd></div><div><dt>目标均值</dt><dd>{{ metrics.target_mean if metrics.target_mean is defined else '—' }}</dd></div><div><dt>目标范围</dt><dd>{{ metrics.target_min if metrics.target_min is defined else '—' }}–{{ metrics.target_max if metrics.target_max is defined else '—' }}</dd></div>
@@ -47,7 +48,7 @@
       <button class="button primary" type="submit" data-loading-text="训练任务提交中…">用全部真实反馈训练/更新</button>
     </form>
   </section>
-  <section class="panel hardware-card"><h2>硬件与运行方式</h2><p class="gpu-name">{{ status.hardware.name }}</p><dl class="compact-facts"><div><dt>XGBoost</dt><dd>{{ status.hardware.xgboost_version or '未安装' }}</dd></div><div><dt>CUDA 训练</dt><dd>{% if status.hardware.cuda_ready %}<span class="status ok">可用</span>{% else %}<span class="status">不可用</span>{% endif %}</dd></div><div><dt>预测设备</dt><dd>CPU</dd></div></dl><p class="help">训练时按上方选择使用 CPU 或 CUDA；训练完成后日常热点打分固定使用 CPU，减少显存占用。本机不会加载 LLM。</p></section>
+  <section class="panel hardware-card"><h2>硬件与运行方式</h2><p class="gpu-name">{{ status.hardware.name }}</p><dl class="compact-facts"><div><dt>XGBoost</dt><dd>{{ status.hardware.xgboost_version or '未安装' }}</dd></div><div><dt>CUDA 训练</dt><dd>{% if status.hardware.cuda_ready %}<span class="status ok">可用</span>{% else %}<span class="status">不可用</span>{% endif %}</dd></div><div><dt>模型评分</dt><dd>{{ status.model_score_device }}</dd></div></dl><p class="help">采集完成后，规则指标会使用批量数据库查询；如果已有 CUDA 版 XGBoost 模型，模型评分会自动尝试 CUDA，失败时回退 CPU。没有训练模型时只使用规则评分。本机不会加载 LLM。</p></section>
 </div>
 
 <div class="analytics-grid">
@@ -82,5 +83,5 @@
 </section>
 
 <section class="panel"><div class="panel-title"><div><h2>训练历史</h2><p class="help">方便比较样本增加后误差是否下降。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>算法 / 设备</th><th>样本</th><th>MAE</th><th>RMSE</th><th>R²</th><th>耗时</th></tr></thead><tbody>{% for item in status.training_history %}{% set m = item.metrics_json %}<tr><td>{{ item.trained_at.strftime('%m-%d %H:%M:%S') }}</td><td>{{ m.algorithm or '—' }} / {{ m.device or '—' }}</td><td>{{ item.sample_count }}</td><td>{{ m.validation_mae if m.validation_mae is not none else '—' }}</td><td>{{ m.validation_rmse if m.validation_rmse is not none else '—' }}</td><td>{{ m.validation_r2 if m.validation_r2 is defined and m.validation_r2 is not none else '—' }}</td><td>{{ m.training_seconds if m.training_seconds is defined else '—' }}</td></tr>{% else %}<tr><td colspan="7" class="muted">还没有训练记录。</td></tr>{% endfor %}</tbody></table></div></section>
-<script src="/static/recommender.js?v=1" defer></script>
+<script src="/static/recommender.js?v=2" defer></script>
 {% endblock %}
